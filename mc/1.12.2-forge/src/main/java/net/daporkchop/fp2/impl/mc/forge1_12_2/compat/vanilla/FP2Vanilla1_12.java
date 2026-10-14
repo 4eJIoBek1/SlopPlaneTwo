@@ -35,6 +35,8 @@ import net.daporkchop.fp2.core.server.world.ExactFBlockLevelHolder;
 import net.daporkchop.fp2.core.server.world.level.IFarLevelServer;
 import net.daporkchop.fp2.impl.mc.forge1_12_2.compat.vanilla.exactfblocklevel.VanillaExactFBlockLevelHolder1_12;
 import net.daporkchop.fp2.impl.mc.forge1_12_2.compat.vanilla.generator.rough.FlatRoughGenerator1_12;
+import net.daporkchop.fp2.impl.mc.forge1_12_2.compat.vanilla.generator.rough.EndRoughGenerator1_12;
+import net.daporkchop.fp2.impl.mc.forge1_12_2.compat.vanilla.generator.rough.VanillaRoughGenerator1_12;
 import net.daporkchop.fp2.impl.mc.forge1_12_2.server.world.level.FLevelServer1_12;
 import net.daporkchop.fp2.impl.mc.forge1_12_2.util.Util1_12;
 import net.minecraft.block.state.IBlockState;
@@ -46,7 +48,10 @@ import net.minecraft.init.Blocks;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
+import net.minecraft.world.WorldType;
+import net.minecraft.world.gen.ChunkGeneratorEnd;
 import net.minecraft.world.gen.ChunkGeneratorFlat;
+import net.minecraft.world.gen.ChunkGeneratorOverworld;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
 import net.minecraftforge.fml.relauncher.Side;
@@ -108,6 +113,45 @@ public class FP2Vanilla1_12 {
         return isSuperflatWorld(event.world())
                 ? Optional.of(new FlatRoughGenerator1_12(event.world(), event.provider()))
                 : Optional.empty();
+    }
+
+    //Default overworld rough generators
+
+    private static boolean isDefaultOverworld(IFarLevelServer world) {
+        //AMPLIFIED is deliberately excluded for now: its per-biome height tweaks happen inside the blend loop,
+        //  which our weight helper can't reproduce. Amplified worlds silently fall back to exact generation.
+        return world.terrainGeneratorInfo().implGenerator() instanceof ChunkGeneratorOverworld
+                && ((WorldServer) world.implLevel()).getWorldInfo().getTerrainType() != WorldType.AMPLIFIED;
+    }
+
+    @FEventHandler(name = "vanilla_generator_rough_default")
+    public Optional<IFarGeneratorRough> createGeneratorRoughDefault(IFarGeneratorRough.CreationEvent event) {
+        if (!isDefaultOverworld(event.world())) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(new VanillaRoughGenerator1_12(event.world(), event.provider()));
+        } catch (IllegalArgumentException e) { //custom BiomeProvider or similar - fall back to exact generation
+            return Optional.empty();
+        }
+    }
+
+    //End rough generators
+
+    private static boolean isEndWorld(IFarLevelServer world) {
+        return world.terrainGeneratorInfo().implGenerator() instanceof ChunkGeneratorEnd;
+    }
+
+    @FEventHandler(name = "vanilla_generator_rough_end")
+    public Optional<IFarGeneratorRough> createGeneratorRoughEnd(IFarGeneratorRough.CreationEvent event) {
+        if (!isEndWorld(event.world())) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(new EndRoughGenerator1_12(event.world(), event.provider()));
+        } catch (IllegalArgumentException e) { //custom BiomeProvider or similar - fall back to exact generation
+            return Optional.empty();
+        }
     }
 
     //tile providers

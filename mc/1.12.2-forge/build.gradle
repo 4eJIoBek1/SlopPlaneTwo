@@ -137,8 +137,12 @@ dependencies {
 
     implementationShade project(":resources")
 
-    implementationProvided fg.deobf(fp2.deleteMixin("io.github.opencubicchunks:cubicchunks:1.12.2-0.0-SNAPSHOT"))
-    implementationProvided fg.deobf("io.github.opencubicchunks:cubicworldgen:1.12.2-0.0-SNAPSHOT")
+    //LOCAL BUILD FIX (revert for upstream): fg.deobf remap can't fetch/convert CC+CWG offline, so use
+    //  pre-mapped -dev jars (MCP names) directly. files() deps skip deobf, which is exactly what we want here.
+    implementationProvided files("C:/Users/GM/Desktop/deleteme/.m2repo/io/github/opencubicchunks/cubicchunks/1.12.2-0.0-SNAPSHOT_mapped_stable_39-1.12/cubicchunks-1.12.2-0.0-SNAPSHOT_mapped_stable_39-1.12.jar")
+    implementationProvided files("C:/Users/GM/Desktop/deleteme/.m2repo/io/github/opencubicchunks/cubicworldgen/1.12.2-0.0-SNAPSHOT_mapped_stable_39-1.12/cubicworldgen-1.12.2-0.0-SNAPSHOT_mapped_stable_39-1.12.jar")
+    //implementationProvided fg.deobf(fp2.deleteMixin("io.github.opencubicchunks:cubicchunks:1.12.2-0.0-SNAPSHOT"))
+    //implementationProvided fg.deobf("io.github.opencubicchunks:cubicworldgen:1.12.2-0.0-SNAPSHOT")
 }
 
 fp2.translateResources {

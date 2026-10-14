@@ -15,6 +15,7 @@
   ],
   "mixins": [
     "server.ATMinecraftServer1_12",
+    "world.biome.ATBiome1_12",
     "world.biome.ATBiomeProvider1_12",
     "world.chunk.storage.ATAnvilChunkLoader1_12",
     "world.chunk.storage.ATRegionFile1_12",
