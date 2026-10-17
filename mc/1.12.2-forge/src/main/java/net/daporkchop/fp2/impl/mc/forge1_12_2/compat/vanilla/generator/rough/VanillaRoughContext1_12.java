@@ -268,8 +268,9 @@ public class VanillaRoughContext1_12 {
             this.regionHStride = 1;
             this.regionNX = this.regionNZ = (spanBlocks >> GTH_SHIFT) + 2;
         }
-        //y run prefix: 0..(highest needed node + 1), capped at the vanilla length
-        this.regionNY = Math.min(((minBlockY + spanBlocks) >> GTV_SHIFT) + 2, COLUMN_NODES);
+        //y run prefix: 0..(highest needed node + 1), capped at the vanilla length. The region must always cover at
+        //  least two nodes (nothing can be interpolated on a single node), which can happen for tiles far below y=0.
+        this.regionNY = Math.max(Math.min(((minBlockY + spanBlocks) >> GTV_SHIFT) + 2, COLUMN_NODES), 2);
 
         double coordScale = this.settings.coordinateScale;
         double heightScale = this.settings.heightScale;
@@ -314,13 +315,13 @@ public class VanillaRoughContext1_12 {
                 double fx = (double) blockX / GTH_SIZE - this.regionGX0;
                 nx0 = floorI(fx);
                 tx = fx - nx0;
-                if (nx0 < 0) {
-                    nx0 = 0;
-                    tx = 0.0d;
-                } else if (nx0 >= this.regionNX - 1) {
-                    nx0 = this.regionNX - 2;
-                    tx = 1.0d;
-                }
+            }
+            if (nx0 < 0) {
+                nx0 = 0;
+                tx = 0.0d;
+            } else if (nx0 >= this.regionNX - 1) { //the last sample is the far edge of the grid, interpolate on the last cell
+                nx0 = this.regionNX - 2;
+                tx = 1.0d;
             }
             for (int dy = 0; dy < size; dy++) {
                 int blockY = minBlockY + (dy << level);
@@ -345,13 +346,13 @@ public class VanillaRoughContext1_12 {
                         double fz = (double) blockZ / GTH_SIZE - this.regionGZ0;
                         nz0 = floorI(fz);
                         tz = fz - nz0;
-                        if (nz0 < 0) {
-                            nz0 = 0;
-                            tz = 0.0d;
-                        } else if (nz0 >= this.regionNZ - 1) {
-                            nz0 = this.regionNZ - 2;
-                            tz = 1.0d;
-                        }
+                    }
+                    if (nz0 < 0) {
+                        nz0 = 0;
+                        tz = 0.0d;
+                    } else if (nz0 >= this.regionNZ - 1) {
+                        nz0 = this.regionNZ - 2;
+                        tz = 1.0d;
                     }
 
                     //vanilla evaluates the density formula on the native grid nodes (4 blocks apart horizontally, 8
