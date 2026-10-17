@@ -113,8 +113,27 @@ public abstract class AbstractDualContouringRoughVoxelGenerator<PARAM> extends A
                             continue;
                         }
 
-                        //the connection will be made on the bottommost layer
-                        int layer = min(max(layer0, layer1) - 1, 1);
+                        //the connection is normally made on the bottommost layer...
+                        int layer;
+                        if (max(layer0, layer1) == 3 && min(layer0, layer1) == 0) {
+                            //...however, an edge spanning from solid+liquid to air can cross both the water surface and the
+                            //  terrain surface. in that case we pick whichever surface is higher up, as that's the one which
+                            //  would be visible from above. using the block layer unconditionally here would swallow the water
+                            //  surface wherever shallow terrain pokes into the topmost water layer, leaving holes in the sea.
+                            double waterDensity0 = densityMap[0][diBase + CACHE_INDEX_ADD[c0]];
+                            double waterDensity1 = densityMap[0][diBase + CACHE_INDEX_ADD[c1]];
+                            double blockDensity0 = densityMap[1][diBase + CACHE_INDEX_ADD[c0]];
+                            double blockDensity1 = densityMap[1][diBase + CACHE_INDEX_ADD[c1]];
+                            if (waterDensity0 > 0.0d != waterDensity1 > 0.0d && blockDensity0 > 0.0d != blockDensity1 > 0.0d) {
+                                //for the vertical edges (which are the only ones where the water flags can differ) c0 is always
+                                //  the bottom corner and c1 the top one, so a larger value of t means a higher surface
+                                layer = minimize(waterDensity0, waterDensity1) > minimize(blockDensity0, blockDensity1) ? 0 : 1;
+                            } else {
+                                layer = min(max(layer0, layer1) - 1, 1);
+                            }
+                        } else {
+                            layer = min(max(layer0, layer1) - 1, 1);
+                        }
 
                         //compute gradients in the current voxel on the chosen layer, which will also serve as the normal vector
                         double densityBase = densityMap[layer][diBase + CACHE_INDEX_ADD_000];

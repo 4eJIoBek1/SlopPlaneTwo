@@ -67,6 +67,9 @@ public class VanillaRoughContext1_12 {
     protected final double[] variations; //weighted raw biome variations (settings-space)
     protected final double[] depthShaped; //shaped depth contribution (d7) per column
 
+    //vanilla's y lattice has 33 nodes (y indices 0..32)
+    protected static final int COLUMN_NODES = 33;
+
     //reusable bulk noise regions (grid space)
     protected double[] minRegion = new double[0];
     protected double[] maxRegion = new double[0];
@@ -75,11 +78,9 @@ public class VanillaRoughContext1_12 {
     protected int regionNY;
     protected int regionNZ;
     protected int regionGX0;
-    protected int regionGY0;
     protected int regionGZ0;
-    protected int strideX;
-    protected int strideY;
-    protected int strideZ;
+    protected int regionHStride; //column spacing in vanilla lattice units (1, or step/4 for level >= GTH_SHIFT)
+    protected final double[] colBuf = new double[COLUMN_NODES]; //scratch for a single column of octave noise
 
     //current initialization position (block space)
     protected int baseX;
@@ -247,64 +248,55 @@ public class VanillaRoughContext1_12 {
         int step = 1 << level;
         int size = this.size;
 
-        //horizontal axes: vanilla grid is 4 blocks (GTH_SIZE). At level >= GTH_SHIFT the samples are grid-aligned
-        //  and we can fold the stride into the noise scale for exact results with tiny bulk arrays.
-        //vertical axis: vanilla grid is 8 blocks (GTV_SIZE), exact at level >= GTV_SHIFT.
-        //Otherwise we generate the covering native grid and trilinearly interpolate (small arrays, only used close up).
-        boolean exactH = level >= GTH_SHIFT;
-        boolean exactV = level >= GTV_SHIFT;
-
         int minBlockX = this.baseX;
         int minBlockY = baseY;
         int minBlockZ = this.baseZ;
         int spanBlocks = (size - 1) * step;
 
-        int gx0, nx;
-        if (exactH) {
-            this.strideX = step >> GTH_SHIFT;
-            gx0 = Math.floorDiv(minBlockX, GTH_SIZE);
-            nx = size;
-            //tile positions are step-aligned, so gx0 is an exact multiple of the stride
-            gx0 = gx0 / this.strideX;
-            this.strideZ = this.strideX;
-            this.regionGX0 = gx0;
-            this.regionGZ0 = Math.floorDiv(minBlockZ, GTH_SIZE) / this.strideZ;
-            this.regionNX = nx;
-            this.regionNZ = nx;
-        } else {
-            this.strideX = this.strideZ = 1;
-            this.regionGX0 = Math.floorDiv(minBlockX, GTH_SIZE);
-            this.regionGZ0 = Math.floorDiv(minBlockZ, GTH_SIZE);
+        //Vanilla always samples the min/max/main noises on the native lattice: columns every 4 blocks, y nodes
+        //  every 8 blocks, with the y index run starting at 0 (the full run is 5*33*5 nodes per chunk). The y run
+        //  MUST start at 0 (and not at the first node we actually need) because NoiseGeneratorImproved keeps a
+        //  per-column cache of x-interpolated corner gradients which is only refreshed when floor(y) changes: the
+        //  values at a node depend on the entire run prefix. Sampling a shifted or shortened run silently produces
+        //  different (wrong) values. Columns are independent of each other, so one vanilla run per column is safe.
+        this.regionGX0 = Math.floorDiv(minBlockX, GTH_SIZE);
+        this.regionGZ0 = Math.floorDiv(minBlockZ, GTH_SIZE);
+        if (level >= GTH_SHIFT) { //samples are grid-aligned: one column per tile node
+            this.regionHStride = step >> GTH_SHIFT;
+            this.regionNX = this.regionNZ = size;
+        } else { //finer than the vanilla grid: cover the native columns and interpolate
+            this.regionHStride = 1;
             this.regionNX = this.regionNZ = (spanBlocks >> GTH_SHIFT) + 2;
         }
-
-        int gy0, ny;
-        if (exactV) {
-            this.strideY = step >> GTV_SHIFT;
-            gy0 = Math.floorDiv(minBlockY, GTV_SIZE);
-            ny = size;
-            gy0 = gy0 / this.strideY;
-            this.regionGY0 = gy0;
-            this.regionNY = ny;
-        } else {
-            this.strideY = 1;
-            this.regionGY0 = Math.floorDiv(minBlockY, GTV_SIZE);
-            this.regionNY = (spanBlocks >> GTV_SHIFT) + 2;
-        }
+        //y run prefix: 0..(highest needed node + 1), capped at the vanilla length
+        this.regionNY = Math.min(((minBlockY + spanBlocks) >> GTV_SHIFT) + 2, COLUMN_NODES);
 
         double coordScale = this.settings.coordinateScale;
         double heightScale = this.settings.heightScale;
-        this.minRegion = this.minLimitNoise.generateNoiseOctaves(ensureCapacity(this.minRegion, this.regionNX * this.regionNY * this.regionNZ),
-                this.regionGX0, this.regionGY0, this.regionGZ0, this.regionNX, this.regionNY, this.regionNZ,
-                coordScale * this.strideX, heightScale * this.strideY, coordScale * this.strideZ);
-        this.maxRegion = this.maxLimitNoise.generateNoiseOctaves(ensureCapacity(this.maxRegion, this.regionNX * this.regionNY * this.regionNZ),
-                this.regionGX0, this.regionGY0, this.regionGZ0, this.regionNX, this.regionNY, this.regionNZ,
-                coordScale * this.strideX, heightScale * this.strideY, coordScale * this.strideZ);
-        this.mainRegion = this.mainNoise.generateNoiseOctaves(ensureCapacity(this.mainRegion, this.regionNX * this.regionNY * this.regionNZ),
-                this.regionGX0, this.regionGY0, this.regionGZ0, this.regionNX, this.regionNY, this.regionNZ,
-                coordScale / this.settings.mainNoiseScaleX * this.strideX,
-                heightScale / this.settings.mainNoiseScaleY * this.strideY,
-                coordScale / this.settings.mainNoiseScaleZ * this.strideZ);
+        //the main noise scales are computed with float arithmetic in vanilla (f / 80.0f etc.), do NOT widen to
+        //  double before dividing!
+        double mainScaleX = this.settings.coordinateScale / this.settings.mainNoiseScaleX;
+        double mainScaleY = this.settings.heightScale / this.settings.mainNoiseScaleY;
+        double mainScaleZ = this.settings.coordinateScale / this.settings.mainNoiseScaleZ;
+
+        this.minRegion = ensureCapacity(this.minRegion, this.regionNX * this.regionNZ * this.regionNY);
+        this.maxRegion = ensureCapacity(this.maxRegion, this.regionNX * this.regionNZ * this.regionNY);
+        this.mainRegion = ensureCapacity(this.mainRegion, this.regionNX * this.regionNZ * this.regionNY);
+
+        for (int ix = 0; ix < this.regionNX; ix++) {
+            int gx = this.regionGX0 + ix * this.regionHStride;
+            for (int iz = 0; iz < this.regionNZ; iz++) {
+                int gz = this.regionGZ0 + iz * this.regionHStride;
+                int idx = (ix * this.regionNZ + iz) * this.regionNY;
+
+                this.minLimitNoise.generateNoiseOctaves(this.colBuf, gx, 0, gz, 1, this.regionNY, 1, coordScale, heightScale, coordScale);
+                System.arraycopy(this.colBuf, 0, this.minRegion, idx, this.regionNY);
+                this.maxLimitNoise.generateNoiseOctaves(this.colBuf, gx, 0, gz, 1, this.regionNY, 1, coordScale, heightScale, coordScale);
+                System.arraycopy(this.colBuf, 0, this.maxRegion, idx, this.regionNY);
+                this.mainNoise.generateNoiseOctaves(this.colBuf, gx, 0, gz, 1, this.regionNY, 1, mainScaleX, mainScaleY, mainScaleZ);
+                System.arraycopy(this.colBuf, 0, this.mainRegion, idx, this.regionNY);
+            }
+        }
 
         double upperScale = this.settings.upperLimitScale;
         double lowerScale = this.settings.lowerLimitScale;
@@ -313,53 +305,139 @@ public class VanillaRoughContext1_12 {
 
         for (int i = 0, dx = 0; dx < size; dx++) {
             int blockX = minBlockX + (dx << level);
-            double gridX = (double) blockX / GTH_SIZE;
-            double fx = exactH ? dx : (gridX - this.regionGX0);
+            int nx0;
+            double tx;
+            if (level >= GTH_SHIFT) { //samples coincide with the generated columns
+                nx0 = dx;
+                tx = 0.0d;
+            } else {
+                double fx = (double) blockX / GTH_SIZE - this.regionGX0;
+                nx0 = floorI(fx);
+                tx = fx - nx0;
+                if (nx0 < 0) {
+                    nx0 = 0;
+                    tx = 0.0d;
+                } else if (nx0 >= this.regionNX - 1) {
+                    nx0 = this.regionNX - 2;
+                    tx = 1.0d;
+                }
+            }
             for (int dy = 0; dy < size; dy++) {
                 int blockY = minBlockY + (dy << level);
-                double gridY = (double) blockY / GTV_SIZE;
-                double fy = exactV ? dy : (gridY - this.regionGY0);
+                double fy = (double) blockY / GTV_SIZE;
+                int ny0 = floorI(fy);
+                double ty = fy - ny0;
+                if (ny0 < 0) {
+                    ny0 = 0;
+                    ty = 0.0d;
+                } else if (ny0 >= this.regionNY - 1) {
+                    ny0 = this.regionNY - 2;
+                    ty = 1.0d;
+                }
                 for (int dz = 0; dz < size; dz++, i++) {
                     int blockZ = minBlockZ + (dz << level);
-                    double gridZ = (double) blockZ / GTH_SIZE;
-                    double fz = exactH ? dz : (gridZ - this.regionGZ0);
-
-                    double minv = sampleTrilinear(this.minRegion, this.regionNX, this.regionNY, this.regionNZ, fx, fy, fz);
-                    double maxv = sampleTrilinear(this.maxRegion, this.regionNX, this.regionNY, this.regionNZ, fx, fy, fz);
-                    double mainv = sampleTrilinear(this.mainRegion, this.regionNX, this.regionNY, this.regionNZ, fx, fy, fz);
-
-                    int colIdx = dx * size + dz;
-                    double variation = this.variations[colIdx] * 0.9d + 0.1d;
-                    double height = (this.heights[colIdx] * 4.0d - 1.0d) / 8.0d;
-
-                    double d8 = height + this.depthShaped[colIdx] * 0.2d;
-                    d8 = d8 * baseSize / 8.0d;
-                    double d0 = baseSize + d8 * 4.0d;
-
-                    double d1 = (gridY - d0) * stretchY * 128.0d / 256.0d / variation;
-                    if (d1 < 0.0d) {
-                        d1 *= 4.0d;
-                    }
-
-                    double d2 = minv / lowerScale;
-                    double d3 = maxv / upperScale;
-                    double d4 = (mainv / 10.0d + 1.0d) / 2.0d;
-                    double density = clamp01Lerp(d2, d3, d4) - d1;
-
-                    //pin the top of the world down, exactly like vanilla does for grid nodes above 29 (y > 232)
-                    double gridYAbs = (double) blockY / GTV_SIZE;
-                    if (gridYAbs > 29.0d) {
-                        double t = (gridYAbs - 29.0d) / 3.0d;
-                        if (t > 1.0d) {
-                            t = 1.0d;
+                    int nz0;
+                    double tz;
+                    if (level >= GTH_SHIFT) {
+                        nz0 = dz;
+                        tz = 0.0d;
+                    } else {
+                        double fz = (double) blockZ / GTH_SIZE - this.regionGZ0;
+                        nz0 = floorI(fz);
+                        tz = fz - nz0;
+                        if (nz0 < 0) {
+                            nz0 = 0;
+                            tz = 0.0d;
+                        } else if (nz0 >= this.regionNZ - 1) {
+                            nz0 = this.regionNZ - 2;
+                            tz = 1.0d;
                         }
-                        density = density * (1.0d - t) + -10.0d * t;
                     }
 
-                    out[i] = density;
+                    //vanilla evaluates the density formula on the native grid nodes (4 blocks apart horizontally, 8
+                    //  vertically) and then trilinearly interpolates the *resulting densities* down to block resolution
+                    //  (see ChunkGeneratorOverworld.setBlocksInChunk). evaluating the formula at intermediate positions
+                    //  instead of the nodes is wrong: the `d1 *= 4.0` branch around d0 must only ever apply to whole nodes,
+                    //  otherwise the interpolated surface ends up at the wrong height and can even get split in two.
+                    double v000 = this.nodeDensity(nx0, ny0, nz0, baseSize, stretchY, lowerScale, upperScale);
+                    double v001 = this.nodeDensity(nx0, ny0, nz0 + 1, baseSize, stretchY, lowerScale, upperScale);
+                    double v010 = this.nodeDensity(nx0, ny0 + 1, nz0, baseSize, stretchY, lowerScale, upperScale);
+                    double v011 = this.nodeDensity(nx0, ny0 + 1, nz0 + 1, baseSize, stretchY, lowerScale, upperScale);
+                    double v100 = this.nodeDensity(nx0 + 1, ny0, nz0, baseSize, stretchY, lowerScale, upperScale);
+                    double v101 = this.nodeDensity(nx0 + 1, ny0, nz0 + 1, baseSize, stretchY, lowerScale, upperScale);
+                    double v110 = this.nodeDensity(nx0 + 1, ny0 + 1, nz0, baseSize, stretchY, lowerScale, upperScale);
+                    double v111 = this.nodeDensity(nx0 + 1, ny0 + 1, nz0 + 1, baseSize, stretchY, lowerScale, upperScale);
+
+                    double v00 = v000 + (v001 - v000) * tz;
+                    double v01 = v010 + (v011 - v010) * tz;
+                    double v10 = v100 + (v101 - v100) * tz;
+                    double v11 = v110 + (v111 - v110) * tz;
+
+                    double v0 = v00 + (v01 - v00) * ty;
+                    double v1 = v10 + (v11 - v10) * ty;
+
+                    out[i] = v0 + (v1 - v0) * tx;
                 }
             }
         }
+    }
+
+    /**
+     * Computes the vanilla density at a single native grid node. {@code nx} and {@code nz} are indices of columns
+     * within the generated noise regions: column {@code i} lies at vanilla lattice index
+     * {@code regionGX0 + i * regionHStride} (4-block spacing). {@code ny} is the vanilla y lattice index (0..32),
+     * i.e. the block height is {@code ny * GTV_SIZE}.
+     * <p>
+     * The column-dependent values (biome height/variation and shaped depth noise) are only defined on nodes; when the
+     * sample grid is coarser than {@link #GTH_SIZE} blocks (level >= {@link #GTH_SHIFT}) the nodes coincide with the
+     * generated columns.
+     */
+    protected double nodeDensity(int nx, int ny, int nz, double baseSize, double stretchY, double lowerScale, double upperScale) {
+        int idx = (nx * this.regionNZ + nz) * this.regionNY + ny;
+        double minv = this.minRegion[idx];
+        double maxv = this.maxRegion[idx];
+        double mainv = this.mainRegion[idx];
+
+        int nodeBlockX = (this.regionGX0 + nx * this.regionHStride) * GTH_SIZE;
+        int nodeBlockZ = (this.regionGZ0 + nz * this.regionHStride) * GTH_SIZE;
+        int colX = (nodeBlockX - this.baseX) >> this.level;
+        int colZ = (nodeBlockZ - this.baseZ) >> this.level;
+        if (colX < 0) {
+            colX = 0;
+        } else if (colX >= this.size) {
+            colX = this.size - 1;
+        }
+        if (colZ < 0) {
+            colZ = 0;
+        } else if (colZ >= this.size) {
+            colZ = this.size - 1;
+        }
+        int colIdx = colX * this.size + colZ;
+
+        double variation = this.variations[colIdx] * 0.9d + 0.1d;
+        double height = (this.heights[colIdx] * 4.0d - 1.0d) / 8.0d;
+
+        double d8 = height + this.depthShaped[colIdx] * 0.2d;
+        d8 = d8 * baseSize / 8.0d;
+        double d0 = baseSize + d8 * 4.0d;
+
+        double d1 = ((double) ny - d0) * stretchY * 128.0d / 256.0d / variation;
+        if (d1 < 0.0d) {
+            d1 *= 4.0d;
+        }
+
+        double density = clamp01Lerp(minv / lowerScale, maxv / upperScale, (mainv / 10.0d + 1.0d) / 2.0d) - d1;
+
+        //pin the top of the world down, exactly like vanilla does for grid nodes above 29 (y > 232).
+        //vanilla computes the factor with float arithmetic: (float)(l1 - 29) / 3.0f
+        if (ny > 29) {
+            double t = (float) (ny - 29) / 3.0f;
+            if (t > 1.0d) {
+                t = 1.0d;
+            }
+            density = density * (1.0d - t) + -10.0d * t;
+        }
+        return density;
     }
 
     protected static double[] ensureCapacity(double[] arr, int length) {
@@ -374,60 +452,5 @@ public class VanillaRoughContext1_12 {
             t = 1.0d;
         }
         return lo + (hi - lo) * t;
-    }
-
-    protected static double sampleTrilinear(@NonNull double[] region, int nx, int ny, int nz, double fx, double fy, double fz) {
-        int x0 = (int) Math.floor(fx);
-        int y0 = (int) Math.floor(fy);
-        int z0 = (int) Math.floor(fz);
-        double tx = fx - x0;
-        double ty = fy - y0;
-        double tz = fz - z0;
-
-        //clamp to valid range (can go out of bounds by rounding at tile edges in interp mode)
-        if (x0 < 0) {
-            x0 = 0;
-            tx = 0.0d;
-        } else if (x0 >= nx - 1) {
-            x0 = nx - 2;
-            tx = 1.0d;
-        }
-        if (y0 < 0) {
-            y0 = 0;
-            ty = 0.0d;
-        } else if (y0 >= ny - 1) {
-            y0 = ny - 2;
-            ty = 1.0d;
-        }
-        if (z0 < 0) {
-            z0 = 0;
-            tz = 0.0d;
-        } else if (z0 >= nz - 1) {
-            z0 = nz - 2;
-            tz = 1.0d;
-        }
-
-        int x1 = x0 + 1;
-        int y1 = y0 + 1;
-        int z1 = z0 + 1;
-
-        double v000 = region[(x0 * nz + z0) * ny + y0];
-        double v001 = region[(x0 * nz + z0 + 1) * ny + y0];
-        double v010 = region[(x0 * nz + z0) * ny + y0 + 1];
-        double v011 = region[(x0 * nz + z0 + 1) * ny + y0 + 1];
-        double v100 = region[(x1 * nz + z0) * ny + y0];
-        double v101 = region[(x1 * nz + z0 + 1) * ny + y0];
-        double v110 = region[(x1 * nz + z0) * ny + y0 + 1];
-        double v111 = region[(x1 * nz + z0 + 1) * ny + y0 + 1];
-
-        double v00 = v000 + (v001 - v000) * tz;
-        double v01 = v010 + (v011 - v010) * tz;
-        double v10 = v100 + (v101 - v100) * tz;
-        double v11 = v110 + (v111 - v110) * tz;
-
-        double v0 = v00 + (v01 - v00) * ty;
-        double v1 = v10 + (v11 - v10) * ty;
-
-        return v0 + (v1 - v0) * tx;
     }
 }
