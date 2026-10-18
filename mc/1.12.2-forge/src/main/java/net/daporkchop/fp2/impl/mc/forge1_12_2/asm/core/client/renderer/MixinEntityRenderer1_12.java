@@ -237,9 +237,10 @@ abstract class MixinEntityRenderer1_12 implements IMixinEntityRenderer1_12 {
     private float fp2_setupFog_lowerFogFarPlaneDistanceForSkyboxRendering(EntityRenderer entityRenderer, int startCoords, float partialTicks) {
         float farPlaneDistance = this.farPlaneDistance;
         if (startCoords == -1) {
-            //clamp the fog distance to the vanilla limit when the skybox is being rendered (this avoids sharp borders in the skybox when
-            // farPlaneDistance is higher than vanilla expects)
-            farPlaneDistance = Math.min(farPlaneDistance, 384.0f);
+            //render the skybox with vanilla's own fog distance so that it ends up looking exactly like vanilla. if the fog is
+            // allowed to reach further, the edges of the sky plane don't get hidden by the fog anymore and show up as sharp
+            // borders in the sky
+            farPlaneDistance = Math.min(farPlaneDistance, this.mc.gameSettings.renderDistanceChunks * 16);
         }
         return farPlaneDistance;
     }
