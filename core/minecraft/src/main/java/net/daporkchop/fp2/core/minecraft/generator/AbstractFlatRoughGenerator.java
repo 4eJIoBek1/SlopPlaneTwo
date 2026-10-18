@@ -43,7 +43,6 @@ import static net.daporkchop.fp2.core.engine.EngineConstants.*;
 /**
  * @author DaPorkchop_
  */
-//TODO: this doesn't support generating at lower detail levels
 public abstract class AbstractFlatRoughGenerator extends AbstractRoughVoxelGenerator {
     protected final Int2ObjectSortedMap<TileData> transitionData;
 
@@ -190,12 +189,17 @@ public abstract class AbstractFlatRoughGenerator extends AbstractRoughVoxelGener
 
     @Override
     public boolean canGenerate(@NonNull TilePos pos) {
-        return pos.level() == 0;
+        //tiles may be generated at any detail level: the layer boundaries are simply quantized to the level's voxel grid, which
+        //  is good enough for LOD rendering - and doing it here avoids recursively generating a whole pyramid of finer tiles
+        //  below each coarse tile, whose size would grow by 4x per level
+        return true;
     }
 
     @Override
     public void generate(@NonNull TilePos pos, @NonNull Tile tile) {
         for (Int2ObjectMap.Entry<TileData> entry : this.transitionData.subMap(pos.minBlockY(), pos.maxBlockY()).int2ObjectEntrySet()) {
+            //at coarse detail levels, multiple transitions may collapse into the same voxel column - entries are visited in
+            //  ascending key order, so the topmost one wins, preserving the state and light of the top face
             int y = (entry.getIntKey() - pos.minBlockY()) >> pos.level();
             TileData data = entry.getValue();
             for (int x = 0; x < T_VOXELS; x++) {
