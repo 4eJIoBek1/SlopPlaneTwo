@@ -70,6 +70,11 @@ public class VanillaRoughContext1_12 {
     //vanilla's y lattice has 33 nodes (y indices 0..32)
     protected static final int COLUMN_NODES = 33;
 
+    //lowest detail level for which the raw density field is replaced by a signed height field. at finer levels the
+    //  sampling grid still resolves the (strongly non-linear) density profile around the surface, and the raw values
+    //  are bit-exact (levels 0..3 sample every vanilla y lattice node), so we keep them there.
+    protected static final int HEIGHT_FIELD_LEVEL = 4;
+
     //reusable bulk noise regions (grid space)
     protected double[] minRegion = new double[0];
     protected double[] maxRegion = new double[0];
@@ -81,6 +86,7 @@ public class VanillaRoughContext1_12 {
     protected int regionGZ0;
     protected int regionHStride; //column spacing in vanilla lattice units (1, or step/4 for level >= GTH_SHIFT)
     protected final double[] colBuf = new double[COLUMN_NODES]; //scratch for a single column of octave noise
+    protected double[] columnHeights = new double[0]; //per-column surface heights (height-field mode)
 
     //current initialization position (block space)
     protected int baseX;
@@ -259,6 +265,13 @@ public class VanillaRoughContext1_12 {
         //  per-column cache of x-interpolated corner gradients which is only refreshed when floor(y) changes: the
         //  values at a node depend on the entire run prefix. Sampling a shifted or shortened run silently produces
         //  different (wrong) values. Columns are independent of each other, so one vanilla run per column is safe.
+        //for coarse levels the raw density field can no longer be resolved by the (very sparse) sampling grid: the
+        //  first solid node sits tens or hundreds of blocks below the real surface, and the linear interpolation done by
+        //  the dual contouring mesher then places the surface far too high, producing phantom "sheets" in the sky.
+        //  instead use a signed height field (surface height minus block Y) so the zero crossing lands exactly on the
+        //  per-column surface.
+        boolean heightField = level >= HEIGHT_FIELD_LEVEL;
+
         this.regionGX0 = Math.floorDiv(minBlockX, GTH_SIZE);
         this.regionGZ0 = Math.floorDiv(minBlockZ, GTH_SIZE);
         if (level >= GTH_SHIFT) { //samples are grid-aligned: one column per tile node
@@ -270,7 +283,10 @@ public class VanillaRoughContext1_12 {
         }
         //y run prefix: 0..(highest needed node + 1), capped at the vanilla length. The region must always cover at
         //  least two nodes (nothing can be interpolated on a single node), which can happen for tiles far below y=0.
-        this.regionNY = Math.max(Math.min(((minBlockY + spanBlocks) >> GTV_SHIFT) + 2, COLUMN_NODES), 2);
+        //in height-field mode the full column profile is always needed to locate the surface.
+        this.regionNY = heightField
+                ? COLUMN_NODES
+                : Math.max(Math.min(((minBlockY + spanBlocks) >> GTV_SHIFT) + 2, COLUMN_NODES), 2);
 
         double coordScale = this.settings.coordinateScale;
         double heightScale = this.settings.heightScale;
@@ -303,6 +319,11 @@ public class VanillaRoughContext1_12 {
         double lowerScale = this.settings.lowerLimitScale;
         double baseSize = this.settings.baseSize;
         double stretchY = this.settings.stretchY;
+
+        if (heightField) {
+            this.fillHeightField(out, minBlockY, level, size, baseSize, stretchY, lowerScale, upperScale);
+            return;
+        }
 
         for (int i = 0, dx = 0; dx < size; dx++) {
             int blockX = minBlockX + (dx << level);
@@ -378,6 +399,50 @@ public class VanillaRoughContext1_12 {
                     double v1 = v10 + (v11 - v10) * ty;
 
                     out[i] = v0 + (v1 - v0) * tx;
+                }
+            }
+        }
+    }
+
+    /**
+     * Fills the density grid with a signed height field: for every sampled column the vanilla density profile is
+     * scanned for its topmost solid node, and the exact surface height is recovered by linearly interpolating the
+     * zero crossing between that node and the one above it. The grid value is then {@code surfaceHeight - blockY}, so
+     * the dual contouring mesher places the surface exactly at the per-column height regardless of the (coarse) grid
+     * spacing. This replaces the raw density on coarse levels only, where the grid is too sparse to resolve the
+     * strongly non-linear density profile.
+     */
+    protected void fillHeightField(@NonNull double[] out, int minBlockY, int level, int size, double baseSize, double stretchY, double lowerScale, double upperScale) {
+        double[] heights = this.columnHeights = ensureCapacity(this.columnHeights, size * size);
+
+        int lastNy = this.regionNY - 1;
+        for (int dx = 0; dx < size; dx++) {
+            for (int dz = 0; dz < size; dz++) {
+                int ny = lastNy;
+                double d0 = this.nodeDensity(dx, ny, dz, baseSize, stretchY, lowerScale, upperScale);
+                while (d0 <= 0.0d && ny > 0) {
+                    d0 = this.nodeDensity(dx, --ny, dz, baseSize, stretchY, lowerScale, upperScale);
+                }
+
+                double h;
+                if (d0 <= 0.0d) {
+                    h = Double.NEGATIVE_INFINITY; //no solid node anywhere in the column
+                } else if (ny == lastNy) {
+                    h = (lastNy + 1) * GTV_SIZE;
+                } else {
+                    double d1 = this.nodeDensity(dx, ny + 1, dz, baseSize, stretchY, lowerScale, upperScale);
+                    double t = d0 - d1 > 0.0d ? d0 / (d0 - d1) : 0.0d;
+                    h = (ny + t) * GTV_SIZE;
+                }
+                heights[dx * size + dz] = h;
+            }
+        }
+
+        for (int i = 0, dx = 0; dx < size; dx++) {
+            for (int dy = 0; dy < size; dy++) {
+                double blockY = minBlockY + (dy << level);
+                for (int dz = 0; dz < size; dz++, i++) {
+                    out[i] = heights[dx * size + dz] - blockY;
                 }
             }
         }
