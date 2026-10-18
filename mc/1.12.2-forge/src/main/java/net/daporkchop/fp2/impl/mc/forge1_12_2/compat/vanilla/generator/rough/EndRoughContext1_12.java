@@ -30,6 +30,8 @@ import net.minecraft.world.gen.NoiseGeneratorSimplex;
 
 import java.util.Random;
 
+import static net.daporkchop.lib.common.math.PMath.floorI;
+
 /**
  * Holds the initialized state for a vanilla {@code ChunkGeneratorEnd} emulation context.
  * <p>
@@ -48,6 +50,9 @@ public class EndRoughContext1_12 {
     public static final int EH_SIZE = 1 << EH_SHIFT;
     public static final int EV_SHIFT = 2;
     public static final int EV_SIZE = 1 << EV_SHIFT;
+
+    //vanilla's density noise runs always cover the full y lattice: 33 nodes, 4 blocks apart
+    public static final int COLUMN_NODES = 33;
 
     //exact vanilla noise scales (see ChunkGeneratorEnd.getHeights, d0 = 684.412 * 2)
     private static final double NOISE_XZ = 684.412d * 2.0d;
@@ -73,15 +78,13 @@ public class EndRoughContext1_12 {
     protected double[] pnrRegion = new double[0];
     protected double[] arRegion = new double[0];
     protected double[] brRegion = new double[0];
+    protected final double[] colBuf = new double[COLUMN_NODES]; //scratch for a single column of octave noise
     protected int regionNX;
     protected int regionNY;
     protected int regionNZ;
     protected int regionGX0;
-    protected int regionGY0;
     protected int regionGZ0;
-    protected int strideX;
-    protected int strideY;
-    protected int strideZ;
+    protected int regionHStride; //column spacing in vanilla lattice units (1, or step/8 for level >= EH_SHIFT)
 
     //current initialization position (block space)
     protected int baseX;
@@ -208,67 +211,112 @@ public class EndRoughContext1_12 {
         int step = 1 << level;
         int size = this.size;
 
-        //End grid is 8 blocks horizontal / 4 blocks vertical: exact at level >= 3 / level >= 2 respectively,
-        //  otherwise generate the covering native grid and trilinearly interpolate.
+        //End grid is 8 blocks horizontal / 4 blocks vertical: samples coincide with vanilla lattice nodes at
+        //  level >= 3 / level >= 2 respectively, otherwise generate the covering native grid and trilinearly
+        //  interpolate.
         boolean exactH = level >= EH_SHIFT;
-        boolean exactV = level >= EV_SHIFT;
 
         int minBlockX = this.baseX;
         int minBlockY = baseY;
         int minBlockZ = this.baseZ;
         int spanBlocks = (size - 1) * step;
 
-        if (exactH) {
-            this.strideX = step >> EH_SHIFT;
-            this.regionGX0 = Math.floorDiv(minBlockX, EH_SIZE) / this.strideX;
-            this.strideZ = this.strideX;
-            this.regionGZ0 = Math.floorDiv(minBlockZ, EH_SIZE) / this.strideZ;
+        //Vanilla always samples the three density noises on the native lattice: columns every 8 blocks, y nodes
+        //  every 4 blocks, with the y index run starting at 0 (the full run is 3*33*3 nodes per chunk). The y run
+        //  MUST start at 0 (and not at the first node we actually need) because NoiseGeneratorImproved keeps a
+        //  per-column cache of x-interpolated corner gradients which is only refreshed when floor(y) changes: the
+        //  values at a node depend on the entire run prefix. Sampling a shifted or shortened run silently produces
+        //  different (wrong) values. Columns are independent of each other, so one vanilla run per column is safe.
+        this.regionGX0 = Math.floorDiv(minBlockX, EH_SIZE);
+        this.regionGZ0 = Math.floorDiv(minBlockZ, EH_SIZE);
+        if (exactH) { //samples are grid-aligned: one column per tile node
+            this.regionHStride = step >> EH_SHIFT;
             this.regionNX = this.regionNZ = size;
-        } else {
-            this.strideX = this.strideZ = 1;
-            this.regionGX0 = Math.floorDiv(minBlockX, EH_SIZE);
-            this.regionGZ0 = Math.floorDiv(minBlockZ, EH_SIZE);
+        } else { //finer than the vanilla grid: cover the native columns and interpolate
+            this.regionHStride = 1;
             this.regionNX = this.regionNZ = (spanBlocks >> EH_SHIFT) + 2;
         }
+        //y run prefix: 0..(highest needed node + 1), capped at the vanilla length. The region must always cover at
+        //  least two nodes (nothing can be interpolated on a single node), which can happen for tiles far below y=0.
+        this.regionNY = Math.max(Math.min(((minBlockY + spanBlocks) >> EV_SHIFT) + 2, COLUMN_NODES), 2);
 
-        if (exactV) {
-            this.strideY = step >> EV_SHIFT;
-            this.regionGY0 = Math.floorDiv(minBlockY, EV_SIZE) / this.strideY;
-            this.regionNY = size;
-        } else {
-            this.strideY = 1;
-            this.regionGY0 = Math.floorDiv(minBlockY, EV_SIZE);
-            this.regionNY = (spanBlocks >> EV_SHIFT) + 2;
+        this.pnrRegion = ensureCapacity(this.pnrRegion, this.regionNX * this.regionNZ * this.regionNY);
+        this.arRegion = ensureCapacity(this.arRegion, this.regionNX * this.regionNZ * this.regionNY);
+        this.brRegion = ensureCapacity(this.brRegion, this.regionNX * this.regionNZ * this.regionNY);
+
+        for (int ix = 0; ix < this.regionNX; ix++) {
+            int gx = this.regionGX0 + ix * this.regionHStride;
+            for (int iz = 0; iz < this.regionNZ; iz++) {
+                int gz = this.regionGZ0 + iz * this.regionHStride;
+                int idx = (ix * this.regionNZ + iz) * this.regionNY;
+
+                this.perlinNoise1.generateNoiseOctaves(this.colBuf, gx, 0, gz, 1, this.regionNY, 1, MAIN_XZ, MAIN_Y, MAIN_XZ);
+                System.arraycopy(this.colBuf, 0, this.pnrRegion, idx, this.regionNY);
+                this.lperlinNoise1.generateNoiseOctaves(this.colBuf, gx, 0, gz, 1, this.regionNY, 1, NOISE_XZ, NOISE_Y, NOISE_XZ);
+                System.arraycopy(this.colBuf, 0, this.arRegion, idx, this.regionNY);
+                this.lperlinNoise2.generateNoiseOctaves(this.colBuf, gx, 0, gz, 1, this.regionNY, 1, NOISE_XZ, NOISE_Y, NOISE_XZ);
+                System.arraycopy(this.colBuf, 0, this.brRegion, idx, this.regionNY);
+            }
         }
-
-        int count = this.regionNX * this.regionNY * this.regionNZ;
-        this.pnrRegion = this.perlinNoise1.generateNoiseOctaves(ensureCapacity(this.pnrRegion, count),
-                this.regionGX0, this.regionGY0, this.regionGZ0, this.regionNX, this.regionNY, this.regionNZ,
-                MAIN_XZ * this.strideX, MAIN_Y * this.strideY, MAIN_XZ * this.strideZ);
-        this.arRegion = this.lperlinNoise1.generateNoiseOctaves(ensureCapacity(this.arRegion, count),
-                this.regionGX0, this.regionGY0, this.regionGZ0, this.regionNX, this.regionNY, this.regionNZ,
-                NOISE_XZ * this.strideX, NOISE_Y * this.strideY, NOISE_XZ * this.strideZ);
-        this.brRegion = this.lperlinNoise2.generateNoiseOctaves(ensureCapacity(this.brRegion, count),
-                this.regionGX0, this.regionGY0, this.regionGZ0, this.regionNX, this.regionNY, this.regionNZ,
-                NOISE_XZ * this.strideX, NOISE_Y * this.strideY, NOISE_XZ * this.strideZ);
 
         for (int i = 0, dx = 0; dx < size; dx++) {
             int blockX = minBlockX + (dx << level);
-            double fx = exactH ? dx : ((double) blockX / EH_SIZE - this.regionGX0);
+            int nx0;
+            double tx;
+            if (exactH) { //samples coincide with the generated columns
+                nx0 = dx;
+                tx = 0.0d;
+            } else {
+                double fx = (double) blockX / EH_SIZE - this.regionGX0;
+                nx0 = floorI(fx);
+                tx = fx - nx0;
+            }
+            if (nx0 < 0) {
+                nx0 = 0;
+                tx = 0.0d;
+            } else if (nx0 >= this.regionNX - 1) { //the last sample is the far edge of the grid, interpolate on the last cell
+                nx0 = this.regionNX - 2;
+                tx = 1.0d;
+            }
             for (int dy = 0; dy < size; dy++) {
                 int blockY = minBlockY + (dy << level);
-                double fy = exactV ? dy : ((double) blockY / EV_SIZE - this.regionGY0);
+                double fy = (double) blockY / EV_SIZE; //absolute y lattice index, same as vanilla's j1
+                int ny0 = floorI(fy);
+                double ty = fy - ny0;
+                if (ny0 < 0) {
+                    ny0 = 0;
+                    ty = 0.0d;
+                } else if (ny0 >= this.regionNY - 1) {
+                    ny0 = this.regionNY - 2;
+                    ty = 1.0d;
+                }
                 for (int dz = 0; dz < size; dz++, i++) {
                     int blockZ = minBlockZ + (dz << level);
-                    double fz = exactH ? dz : ((double) blockZ / EH_SIZE - this.regionGZ0);
+                    int nz0;
+                    double tz;
+                    if (exactH) {
+                        nz0 = dz;
+                        tz = 0.0d;
+                    } else {
+                        double fz = (double) blockZ / EH_SIZE - this.regionGZ0;
+                        nz0 = floorI(fz);
+                        tz = fz - nz0;
+                    }
+                    if (nz0 < 0) {
+                        nz0 = 0;
+                        tz = 0.0d;
+                    } else if (nz0 >= this.regionNZ - 1) {
+                        nz0 = this.regionNZ - 2;
+                        tz = 1.0d;
+                    }
 
                     double density;
                     if (blockY >= 128) {
                         density = -30.0d; //vanilla never writes blocks at y >= 128
                     } else {
-                        double pnr = sampleTrilinear(this.pnrRegion, this.regionNX, this.regionNY, this.regionNZ, fx, fy, fz);
-                        double ar = sampleTrilinear(this.arRegion, this.regionNX, this.regionNY, this.regionNZ, fx, fy, fz);
-                        double br = sampleTrilinear(this.brRegion, this.regionNX, this.regionNY, this.regionNZ, fx, fy, fz);
+                        double pnr = sampleTrilinear(this.pnrRegion, this.regionNX, this.regionNY, this.regionNZ, nx0, ny0, nz0, tx, ty, tz);
+                        double ar = sampleTrilinear(this.arRegion, this.regionNX, this.regionNY, this.regionNZ, nx0, ny0, nz0, tx, ty, tz);
+                        double br = sampleTrilinear(this.brRegion, this.regionNX, this.regionNY, this.regionNZ, nx0, ny0, nz0, tx, ty, tz);
 
                         double d2 = ar / 512.0d;
                         double d3 = br / 512.0d;
@@ -277,17 +325,16 @@ public class EndRoughContext1_12 {
                         d4 -= 8.0d;
                         d4 += this.islandHeights[dx * size + dz];
 
-                        //pin the top down, exactly like vanilla (j1 is the absolute y grid index)
-                        double gridY = (double) blockY / EV_SIZE;
-                        if (gridY > 14.0d) {
-                            double t = (gridY - 14.0d) / 64.0d;
+                        //pin the top down, exactly like vanilla (fy is the absolute y grid index, i.e. j1)
+                        if (fy > 14.0d) {
+                            double t = (fy - 14.0d) / 64.0d;
                             if (t > 1.0d) {
                                 t = 1.0d;
                             }
                             d4 = d4 * (1.0d - t) + -3000.0d * t;
                         }
-                        if (gridY < 8.0d) {
-                            double t = (8.0d - gridY) / 7.0d;
+                        if (fy < 8.0d) {
+                            double t = (8.0d - fy) / 7.0d;
                             d4 = d4 * (1.0d - t) + -30.0d * t;
                         }
 
@@ -304,37 +351,7 @@ public class EndRoughContext1_12 {
         return arr.length >= length ? arr : new double[length];
     }
 
-    protected static double sampleTrilinear(@NonNull double[] region, int nx, int ny, int nz, double fx, double fy, double fz) {
-        int x0 = (int) Math.floor(fx);
-        int y0 = (int) Math.floor(fy);
-        int z0 = (int) Math.floor(fz);
-        double tx = fx - x0;
-        double ty = fy - y0;
-        double tz = fz - z0;
-
-        //clamp to valid range (can go out of bounds by rounding at tile edges in interp mode)
-        if (x0 < 0) {
-            x0 = 0;
-            tx = 0.0d;
-        } else if (x0 >= nx - 1) {
-            x0 = nx - 2;
-            tx = 1.0d;
-        }
-        if (y0 < 0) {
-            y0 = 0;
-            ty = 0.0d;
-        } else if (y0 >= ny - 1) {
-            y0 = ny - 2;
-            ty = 1.0d;
-        }
-        if (z0 < 0) {
-            z0 = 0;
-            tz = 0.0d;
-        } else if (z0 >= nz - 1) {
-            z0 = nz - 2;
-            tz = 1.0d;
-        }
-
+    protected static double sampleTrilinear(@NonNull double[] region, int nx, int ny, int nz, int x0, int y0, int z0, double tx, double ty, double tz) {
         int x1 = x0 + 1;
         int y1 = y0 + 1;
         int z1 = z0 + 1;
