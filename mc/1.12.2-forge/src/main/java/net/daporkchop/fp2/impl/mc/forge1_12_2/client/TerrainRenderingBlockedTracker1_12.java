@@ -144,7 +144,10 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
             int chunkZ = pos.getZ() >> 4;
             assert chunkX >= minChunkX && chunkX < maxChunkX && chunkY >= minChunkY && chunkY < maxChunkY && chunkZ >= minChunkZ && chunkZ < maxChunkZ
                     : "RenderChunk(" + chunkX + ',' + chunkY + ',' + chunkZ + ") is outside of render distance: from (" + minChunkX + ',' + minChunkY + ',' + minChunkZ + ") to (" + maxChunkX + ',' + maxChunkY + ',' + maxChunkZ + ')';
-            srcFlags[((chunkX + offsetChunkX) * factorChunkY + (chunkY + offsetChunkY)) * factorChunkZ + (chunkZ + offsetChunkZ)] = flags;
+            int index = ((chunkX + offsetChunkX) * factorChunkY + (chunkY + offsetChunkY)) * factorChunkZ + (chunkZ + offsetChunkZ);
+            if (index >= 0 && index < srcFlags.length) { //the render info list may briefly contain chunks outside of the grid, e.g. immediately after a render distance change - simply ignore those
+                srcFlags[index] = flags;
+            }
         });
 
         //iterate over all the RenderChunks, because they indicate:
@@ -174,7 +177,10 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
             int chunkZ = pos.getZ() >> 4;
             assert chunkX >= minChunkX && chunkX < maxChunkX && chunkY >= minChunkY && chunkY < maxChunkY && chunkZ >= minChunkZ && chunkZ < maxChunkZ
                     : "RenderChunk(" + chunkX + ',' + chunkY + ',' + chunkZ + ") is outside of render distance: from (" + minChunkX + ',' + minChunkY + ',' + minChunkZ + ") to (" + maxChunkX + ',' + maxChunkY + ',' + maxChunkZ + ')';
-            srcFlags[((chunkX + offsetChunkX) * factorChunkY + (chunkY + offsetChunkY)) * factorChunkZ + (chunkZ + offsetChunkZ)] |= flags;
+            int index = ((chunkX + offsetChunkX) * factorChunkY + (chunkY + offsetChunkY)) * factorChunkZ + (chunkZ + offsetChunkZ);
+            if (index >= 0 && index < srcFlags.length) { //(see above)
+                srcFlags[index] |= flags;
+            }
         });
 
         //iterate over the whole grid again, setting the flag to indicate fp2 rendering is blocked by the RenderChunk at the given position if
