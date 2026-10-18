@@ -43,6 +43,7 @@ import net.daporkchop.fp2.core.util.annotation.CalledWithMonitor;
 import net.daporkchop.lib.unsafe.PUnsafe;
 
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static net.daporkchop.lib.common.util.PValidation.*;
 import static net.daporkchop.lib.common.util.PorkUtil.*;
@@ -56,9 +57,11 @@ public abstract class AbstractFarPlayerClient<F extends FP2Core> implements IFar
 
     protected IFarClientContext context;
 
-    protected boolean handshakeReceived;
-    protected boolean clientReady;
-    protected boolean initialConfigSent;
+    //these flags may be read/written by both the client thread (from ready()) and the network thread (from handle(SPacketHandshake)) without the
+    //  monitor being held, so they need to be safe for concurrent access. see ready() for details.
+    protected volatile boolean handshakeReceived;
+    protected volatile boolean clientReady;
+    protected final AtomicBoolean initialConfigSent = new AtomicBoolean(false);
     protected boolean sessionOpen;
     protected boolean closed;
 
@@ -194,7 +197,11 @@ public abstract class AbstractFarPlayerClient<F extends FP2Core> implements IFar
     @CalledFromAnyThread
     @CalledFromClientThread
     @Override
-    public synchronized void ready() {
+    public void ready() {
+        //this method must NEVER be synchronized! it is called from the client thread, while the monitor is held by the network thread whenever it
+        //  is handling a packet which loads or unloads a level. loading a level blocks until a task has been executed by the client thread, so waiting
+        //  for the monitor to become available here would deadlock the client thread against the network thread - which is exactly what happens on
+        //  a dimension change, as session begin/end packets arrive while the client thread is still busy reloading its own world.
         if (!this.clientReady) {
             this.clientReady = true;
 
@@ -202,14 +209,12 @@ public abstract class AbstractFarPlayerClient<F extends FP2Core> implements IFar
         }
     }
 
-    @CalledWithMonitor
+    @CalledFromAnyThread
     protected void trySendInitialConfig() {
-        if (!this.initialConfigSent) {
-            if (this.handshakeReceived && this.clientReady) {
-                this.initialConfigSent = true;
-
-                this.send(CPacketClientConfig.create(this.fp2().globalConfig()));
-            }
+        //the initial config packet must be sent exactly once, but both the client thread (via ready()) and the network thread (via handle(SPacketHandshake))
+        //  may attempt to send it at the same time: use a CAS on the flag rather than the monitor, which ready() deliberately doesn't acquire.
+        if (this.handshakeReceived && this.clientReady && this.initialConfigSent.compareAndSet(false, true)) {
+            this.send(CPacketClientConfig.create(this.fp2().globalConfig()));
         }
     }
 
