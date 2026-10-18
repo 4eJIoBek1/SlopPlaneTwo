@@ -193,6 +193,10 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
     }
 
     private void checkSelfRenderable(@NonNull TilePos pos) {
+        if (!pos.isLevelValid()) { //skip positions at invalid zoom levels (e.g. the parent of a tile at the highest available level)
+            return;
+        }
+
         if (this.coordLimits.contains(pos)) {
             //TODO: determining if a tile is renderable is currently pretty inefficient, maybe we can do it better (e.g. using Int3HashSet#countInRange() or a reference-counting index)
             //this.updateRenderable(pos,
