@@ -266,9 +266,12 @@ public class VoxelScalerIntersection extends AbstractVoxelGenerator implements I
                             if (((edges >> (edge << 1)) & EDGE_DIR_MASK) != EDGE_DIR_NONE) {
                                 data.states[edge] = 1;
 
+                                //search from the top down: when multiple surface layers collapse into a single coarse voxel (such as the
+                                //  bottom and top faces of a flat world, or the two sides of a thin floating island), this preserves the
+                                //  state and light of the top face, which is the one actually visible from above
                                 VOXEL_SEARCH:
                                 for (int dx = 0; dx < 2; dx++) {
-                                    for (int dy = 0; dy < 2; dy++) {
+                                    for (int dy = 1; dy >= 0; dy--) {
                                         for (int dz = 0; dz < 2; dz++) {
                                             if ((data.states[edge] = srcStates[srcIndex((x << 1) + dx, (y << 1) + dy, (z << 1) + dz, edge)]) != 0) {
                                                 int si = srcIndex((x << 1) + dx, (y << 1) + dy, (z << 1) + dz);
