@@ -33,6 +33,7 @@ import net.minecraftforge.fml.relauncher.SideOnly;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Arrays;
 
@@ -104,6 +105,10 @@ public class OFHelper1_12 {
     private static final MethodHandle OF_SHADERS_BEGINWATER = !OF ? null : staticHandle("net.optifine.shaders.Shaders", void.class, "beginWater");
     private static final MethodHandle OF_SHADERS_ENDWATER = !OF ? null : staticHandle("net.optifine.shaders.Shaders", void.class, "endWater");
 
+    private static final Field OF_SHADERS_ISSHADOWPASS_FIELD = !OF ? null : field("net.optifine.shaders.Shaders", "isShadowPass");
+    private static final Field OF_SHADERS_PROGRAMWATER_FIELD = !OF ? null : field("net.optifine.shaders.Shaders", "ProgramWater");
+    private static final Method OF_PROGRAM_GETID = !OF ? null : method("net.optifine.shaders.Program", "getId");
+
     public static final String OF_DEFINE_SHADERS = "OPTIFINE_SHADERS";
 
     @SneakyThrows(Throwable.class)
@@ -151,6 +156,29 @@ public class OFHelper1_12 {
         OF_SHADERS_ENDWATER.invokeExact();
     }
 
+    /**
+     * @return whether Optifine is currently rendering the shadow map
+     */
+    @SneakyThrows(Throwable.class)
+    public static boolean of_Shaders_isShadowPass() {
+        return OF && OF_SHADERS_ISSHADOWPASS_FIELD.getBoolean(null);
+    }
+
+    /**
+     * @return the OpenGL program ID of the shader pack's water shader program, or a non-positive value if no water program is available
+     */
+    public static int of_Shaders_programWaterId() {
+        if (!OF) {
+            return -1;
+        }
+        try {
+            Object program = OF_SHADERS_PROGRAMWATER_FIELD.get(null);
+            return program == null ? -1 : (int) OF_PROGRAM_GETID.invoke(program);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
     private static Class<?> toClass(@NonNull Object in) {
         if (in instanceof Class) {
             return uncheckedCast(in);
@@ -161,11 +189,27 @@ public class OFHelper1_12 {
         }
     }
 
+    private static Field field(@NonNull Object clazz, @NonNull String name) {
+        try {
+            return toClass(clazz).getField(name);
+        } catch (NoSuchFieldException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
     private static MethodHandle staticHandle(@NonNull Object clazz, @NonNull Object returnType, @NonNull String name, @NonNull Object... params) {
         try {
             MethodType type = MethodType.methodType(toClass(returnType), Arrays.stream(params).map(OFHelper1_12::toClass).toArray(Class[]::new));
             return MethodHandles.lookup().findStatic(toClass(clazz), name, type);
         } catch (NoSuchMethodException | IllegalAccessException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static Method method(@NonNull Object clazz, @NonNull String name) {
+        try {
+            return toClass(clazz).getMethod(name);
+        } catch (NoSuchMethodException e) {
             throw new RuntimeException(e);
         }
     }

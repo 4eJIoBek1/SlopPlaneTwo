@@ -97,3 +97,30 @@ uint normalToFaceIndex(vec3 normal)  {
         return normal.x < 0. ? 3 : 0;
     }*/
 }
+
+// texture coordinates
+
+/**
+ * Computes the texture coordinate factor for a position on the given face, relative to the given base position.
+ * <p>
+ * The returned value is in units of texture repetitions: it is the offset from the face's texture origin (which is located at the base position), measured
+ * along the face's two texture axes. It is a linear function of the position, and can therefore be interpolated.
+ *
+ * @param normal  the face normal
+ * @param pos     the position to compute the texture coordinate factor for
+ * @param basePos the position of the face's texture origin (usually the provoking vertex' position)
+ */
+vec2 texUvFactor(vec3 normal, vec3 pos, vec3 basePos) {
+    vec3 delta = pos - basePos;
+
+    vec3 s = sign(normal);
+    normal = -abs(normal);
+
+    //does this have some special name? i have no idea, but i'm pretty proud of it
+    vec2 uv_factor = vec2(0.);
+    uv_factor += vec2(1. - delta.x, -s.y * delta.z) * normal.y;
+    uv_factor += vec2(-s.z * delta.x, delta.y) * normal.z;
+    uv_factor += vec2(s.x * delta.z, delta.y) * normal.x;
+
+    return uv_factor;
+}

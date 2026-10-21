@@ -34,6 +34,7 @@ import net.daporkchop.fp2.core.client.FP2Client;
 import net.daporkchop.fp2.core.client.IFrustum;
 import net.daporkchop.fp2.core.client.render.GlobalRenderer;
 import net.daporkchop.fp2.core.client.render.LevelRenderer;
+import net.daporkchop.fp2.core.client.render.ShaderPackCompat;
 import net.daporkchop.fp2.core.client.render.state.CameraState;
 import net.daporkchop.fp2.core.client.render.state.CameraStateUniforms;
 import net.daporkchop.fp2.core.client.render.state.DrawState;
@@ -93,12 +94,27 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
     @EqualsAndHashCode
     @ToString
     private static final class DrawShaderVariant {
+        /**
+         * The output variables which are captured by the transform feedback pass, in the order in which they're written to the buffer.
+         * <p>
+         * This is synced with {@code resources/assets/fp2/shaders/geom/xfb.geom} and the {@code SHADER_PACK_XFB_*_OFFSET} constants in
+         * {@link RenderConstants}.
+         */
+        private static final String[] XFB_OUTPUT_VARIABLES = {
+                "xfb_pos", "xfb_color", "xfb_uv", "xfb_normal", "xfb_light", "xfb_entity"
+        };
+
         final @NonNull FP2Config.Debug.DebugColorMode debugColorMode;
         final @NonNull DrawState.FogMode fogMode;
         final @NonNull RenderIndex.PosTechnique posTechnique;
         final @NonNull GpuQuadLists.QuadsTechnique quadsTechnique;
         final boolean cutout;
         final boolean stencil;
+        /**
+         * Whether this variant is a transform feedback program which captures geometry in the vertex format expected by shader packs, rather than a
+         * regular drawing program.
+         */
+        final boolean xfb;
 
         public ImmutableMap<String, Object> defines() {
             ImmutableMap.Builder<String, Object> builder = ImmutableMap.builder();
@@ -140,6 +156,10 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
                     default:
                         throw new IllegalArgumentException(this.quadsTechnique.name());
                 }
+
+                if (this.xfb) {
+                    builder.transformFeedbackVaryings(XFB_OUTPUT_VARIABLES, GL_INTERLEAVED_ATTRIBS);
+                }
             };
         }
 
@@ -168,7 +188,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
                                 boolean cutout = (i & 0b01) != 0;
                                 boolean stencil = (i & 0b10) != 0;
 
-                                result.add(new DrawShaderVariant(debugColorMode, fogMode, posTechnique, quadsTechnique, cutout, stencil));
+                                result.add(new DrawShaderVariant(debugColorMode, fogMode, posTechnique, quadsTechnique, cutout, stencil, false));
                             }
                         }
                     }
@@ -195,6 +215,26 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
                     builder.addShader(ShaderType.FRAGMENT, Identifier.from(MODID, "shaders/frag/block.frag"));
                 }
             }
+
+            //transform feedback programs which capture fp2's geometry in the vertex format expected by shader packs. these are used to draw the far terrain
+            //  through a shader pack's own shader programs, but are registered unconditionally so that they're already available when a pack gets enabled.
+            for (val posTechnique : RenderIndex.PosTechnique.values()) {
+                if (!gl.supports(posTechnique.requiredExtensions())) {
+                    continue;
+                }
+
+                for (val quadsTechnique : GpuQuadLists.QuadsTechnique.values()) {
+                    if (!gl.supports(quadsTechnique.requiredExtensions())) {
+                        continue;
+                    }
+
+                    val variant = new DrawShaderVariant(FP2Config.Debug.DebugColorMode.DISABLED, DrawState.FogMode.DISABLED, posTechnique, quadsTechnique, false, false, true);
+                    val builder = shaderRegistryBuilder.registerDraw(variant, shaderMacros.withDefined(variant.defines()), variant.setupFunction(client, globalRenderer));
+                    builder.addShader(ShaderType.VERTEX, Identifier.from(MODID, "shaders/vert/voxel/voxel.vert"));
+                    builder.addShader(ShaderType.GEOMETRY, Identifier.from(MODID, "shaders/geom/xfb.geom"));
+                    builder.addShader(ShaderType.FRAGMENT, Identifier.from(MODID, "shaders/frag/xfb.frag"));
+                }
+            }
         }
     }
 
@@ -218,6 +258,31 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
     protected final RenderIndex<VertexType> renderIndex;
     protected final BakeManager<VertexType> bakeManager;
 
+    /**
+     * Whether a shader pack was active when this renderer was created.
+     * <p>
+     * Shader pack compatibility needs a render index implementation which is able to draw each tile individually, but the implementation is selected once
+     * when the renderer is created. If this value doesn't match the current state, the renderer needs to be recreated.
+     */
+    protected final boolean shaderPackActive;
+
+    /**
+     * The camera state with which the current frame's translucent pass would have to be drawn through a shader pack's water shader program, or
+     * {@code null} if there is nothing to draw.
+     * <p>
+     * The translucent pass can't be drawn together with the others when a shader pack is active, as its water shader program only becomes active during
+     * the vanilla translucent render pass. It is therefore deferred to {@link #renderShaderPackWater()} instead.
+     */
+    protected CameraState shaderPackWaterCameraState;
+
+    /**
+     * The transform feedback program which was used to capture the current frame's geometry for shader pack compatibility, or {@code null} if it wasn't
+     * captured.
+     * <p>
+     * This is only used to capture the translucent pass in {@link #renderShaderPackWater()}.
+     */
+    protected DrawShaderProgram shaderPackXfbShaderProgram;
+
     protected final RenderIndex.PosTechnique tilePosTechnique;
     protected final GpuQuadLists.QuadsTechnique textureQuadsTechnique;
     protected final DrawMode drawMode;
@@ -237,6 +302,8 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
             this.levelRenderer = context.level().renderer();
             this.gl = client.gl();
 
+            this.shaderPackActive = ShaderPackCompat.isActive();
+
             RenderIndexType renderIndexType = this.chooseRenderIndexType();
 
             this.vertexFormat = (AttributeFormat<VertexType>) globalRenderer.voxelVertexAttributesFormat;
@@ -247,7 +314,8 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
             //If GL_ARB_compatibility is supported, we can draw using quads instead of triangles.
             //Based on tests, this seems to very slightly improve performance - modern GPUs seem to be able to split indexed quads into triangles
             //  in hardware, and it reduces the size of our index buffers.
-            this.drawMode = this.fp2.globalConfig().performance().renderQuads() && this.gl.supports(GLExtension.GL_ARB_compatibility)
+            //  Shader pack compatibility requires triangles, as geometry shaders can't accept quads as an input primitive type.
+            this.drawMode = !this.shaderPackActive && this.fp2.globalConfig().performance().renderQuads() && this.gl.supports(GLExtension.GL_ARB_compatibility)
                     ? DrawMode.QUADS
                     : DrawMode.TRIANGLES;
 
@@ -353,21 +421,38 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
         final DrawShaderProgram blockShaderProgram;
         final DrawShaderProgram blockCutoutShaderProgram;
         final DrawShaderProgram blockStencilShaderProgram;
+        final DrawShaderProgram xfbShaderProgram;
     }
 
     private CapturedShaderPrograms captureShaderPrograms(@NonNull FP2Config.Debug.DebugColorMode debugColorMode, @NonNull DrawState.FogMode fogMode) {
         ReloadableShaderRegistry shaderRegistry = this.fp2.client().globalRenderer().shaderRegistry;
 
         return new CapturedShaderPrograms(
-                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(debugColorMode, fogMode, this.tilePosTechnique, this.textureQuadsTechnique, false, false)).get(),
-                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(debugColorMode, fogMode, this.tilePosTechnique, this.textureQuadsTechnique, true, false)).get(),
-                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(debugColorMode, fogMode, this.tilePosTechnique, this.textureQuadsTechnique, false, true)).get());
+                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(debugColorMode, fogMode, this.tilePosTechnique, this.textureQuadsTechnique, false, false, false)).get(),
+                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(debugColorMode, fogMode, this.tilePosTechnique, this.textureQuadsTechnique, true, false, false)).get(),
+                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(debugColorMode, fogMode, this.tilePosTechnique, this.textureQuadsTechnique, false, true, false)).get(),
+                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(FP2Config.Debug.DebugColorMode.DISABLED, DrawState.FogMode.DISABLED, this.tilePosTechnique, this.textureQuadsTechnique, false, false, true)).get());
     }
 
     /**
      * Renders a frame.
      */
+    /**
+     * Checks whether the shader pack state has changed since this renderer was created.
+     * <p>
+     * If this returns {@code true}, the renderer must be recreated (see {@link IFarClientContext#reloadRenderer()}) so that the appropriate render index
+     * implementation gets selected. This must not be called from within {@link #render(CameraState, DrawState)}, as reloading the renderer closes it!
+     *
+     * @return whether this renderer needs to be recreated in order to match the current shader pack state
+     */
+    public boolean needsReloadForShaderPackChange() {
+        return this.shaderPackActive != ShaderPackCompat.isActive();
+    }
+
     public void render(@NonNull CameraState cameraState, @NonNull DrawState drawState) {
+        this.shaderPackWaterCameraState = null; //reset the pending translucent pass draw, it will be re-initialized below if needed
+        this.shaderPackXfbShaderProgram = null;
+
         RenderIndex.DrawableMask drawableMask = this.renderIndex.drawableMask();
 
         if (FP2_DEBUG && !this.fp2.globalConfig().debug().levelZeroRendering()) {
@@ -392,7 +477,8 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
                 cameraState, this.cameraStateUniformsBuffer,
                 drawState, this.drawStateUniformsBuffer,
                 this.levelRenderer.blockedTracker(),
-                this.fp2.client().renderManager().isReversedZSupportedAndActive());
+                this.fp2.client().renderManager().isReversedZSupportedAndActive(),
+                capturedShaderPrograms.xfbShaderProgram);
 
         try (val ignored = this.statePreserverDraw.backup()) { //back up opengl state prior to rendering
             this.preRender(drawArguments);
@@ -415,11 +501,69 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
             }
 
             if (drawableMask.shouldDrawAnythingForLayer(RenderConstants.LAYER_TRANSPARENT)) {
-                this.renderTransparentStencilPass(drawableMask, drawArguments, capturedShaderPrograms);
-                this.renderTransparentFragmentPass(drawableMask, drawArguments, capturedShaderPrograms);
+                ShaderPackCompat.Renderer shaderPack = ShaderPackCompat.isActive() ? ShaderPackCompat.renderer() : null;
+                if (shaderPack != null && shaderPack.hasWaterProgram()) {
+                    //a shader pack is active: the translucent pass must be rendered through the pack's water shader program, which only becomes active
+                    //  during the vanilla translucent render pass. defer it to renderShaderPackWater(), which will be called from there.
+                    this.shaderPackWaterCameraState = cameraState;
+                    this.shaderPackXfbShaderProgram = capturedShaderPrograms.xfbShaderProgram;
+                } else if (shaderPack != null) {
+                    //the pack doesn't have a usable water shader program, so draw the translucent geometry as part of the regular opaque pass instead -
+                    //  there is no point in deferring it to the water pass, as there would be no program to draw it with
+                    for (int level = drawableMask.minLevelToDraw(); level < drawableMask.maxLevelToDraw(); level++) {
+                        if (drawableMask.shouldDrawAnythingForLevelLayer(level, RenderConstants.LAYER_TRANSPARENT)) {
+                            this.renderShaderPackTransparent(drawArguments, capturedShaderPrograms, level);
+                        }
+                    }
+                } else {
+                    this.renderTransparentStencilPass(drawableMask, drawArguments, capturedShaderPrograms);
+                    this.renderTransparentFragmentPass(drawableMask, drawArguments, capturedShaderPrograms);
+                }
             }
 
             this.postRender(drawArguments);
+        }
+    }
+
+    /**
+     * Draws the translucent pass of the far terrain through the active shader pack's water shader program.
+     * <p>
+     * This has to be called from within the shader pack's water rendering phase (while the vanilla translucent render pass is being rendered), as the pack's
+     * water shader program is only active at that point in the frame - and its deferred pass has already run, so the pack will apply its water shading to
+     * the far terrain exactly like it does for vanilla water.
+     * <p>
+     * If no shader pack is active, or the far terrain has no translucent tiles to draw, this does nothing.
+     */
+    public void renderShaderPackWater() {
+        CameraState cameraState = this.shaderPackWaterCameraState;
+        DrawShaderProgram xfbShaderProgram = this.shaderPackXfbShaderProgram;
+        if (cameraState == null || xfbShaderProgram == null) { //there is nothing to draw in this frame
+            return;
+        }
+        this.shaderPackWaterCameraState = null;
+        this.shaderPackXfbShaderProgram = null;
+
+        ShaderPackCompat.Renderer shaderPack = ShaderPackCompat.renderer();
+        if (shaderPack == null || !shaderPack.isActive()) { //shader pack compatibility is not available (any more)
+            return;
+        }
+
+        try (val ignored = this.statePreserverDraw.backup()) { //back up opengl state prior to rendering
+            //the uniform buffers are restored to their previous values when the regular render pass ends, but the captured geometry still needs the camera
+            //  state in order to compute camera-relative vertex positions. note that these binding points are the same ones used by preRender().
+            this.gl.glBindBufferBase(GL_UNIFORM_BUFFER, RenderConstants.CAMERA_STATE_UNIFORMS_UBO_BINDING, this.cameraStateUniformsBuffer.buffer().id());
+            this.gl.glBindBufferBase(GL_UNIFORM_BUFFER, RenderConstants.DRAW_STATE_UNIFORMS_UBO_BINDING, this.drawStateUniformsBuffer.buffer().id());
+
+            //fp2's state preserver resets the fixed-function state before drawing, which includes disabling depth testing. the translucent pass is drawn
+            //  outside of the regular render pass, so it doesn't go through preRender() and has to set up the state it needs on its own.
+            this.gl.glEnable(GL_DEPTH_TEST);
+            this.gl.glDepthFunc(this.fp2.client().renderManager().isReversedZSupportedAndActive() ? GL_GREATER : GL_LESS);
+            this.gl.glDepthMask(true);
+
+            //bind the block texture UVs, which are used to look up the texture coordinates of the block face each vertex belongs to
+            this.levelRenderer.textureUVs().gpuQuadLists().bind(this.gl);
+
+            this.renderIndex.drawShaderPackWater(cameraState, shaderPack, xfbShaderProgram);
         }
     }
 
@@ -476,6 +620,21 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
         this.renderIndex.draw(drawArguments, level, RenderConstants.LAYER_CUTOUT, shader, uniformSetter);
 
         //MC.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE).restoreLastBlurMipmap();
+    }
+
+    /**
+     * Draws the translucent tiles of the given detail level using the shader pack's cutout program.
+     * <p>
+     * This is only used when the pack doesn't have a usable water shader program: the translucent geometry is then drawn as part of the regular opaque pass
+     * (as opaque geometry), so that it is at least lit and textured by the pack instead of not being rendered at all.
+     */
+    private void renderShaderPackTransparent(RenderIndex.DrawArguments drawArguments, CapturedShaderPrograms capturedShaderPrograms, int level) {
+        this.gl.glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+        this.gl.glStencilFunc(GL_LEQUAL, level, 0x7F);
+
+        val shader = capturedShaderPrograms.blockCutoutShaderProgram;
+        val uniformSetter = shader.bindUnsafe();
+        this.renderIndex.draw(drawArguments, level, RenderConstants.LAYER_TRANSPARENT, shader, uniformSetter);
     }
 
     private void renderTransparentStencilPass(RenderIndex.DrawableMask drawableMask, RenderIndex.DrawArguments drawArguments, CapturedShaderPrograms capturedShaderPrograms) {

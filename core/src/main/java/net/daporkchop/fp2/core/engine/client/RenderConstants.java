@@ -82,4 +82,38 @@ public class RenderConstants {
     public static final int TILE_POS_ARRAY_UBO_ELEMENTS = 16384 / GLIVec4.BYTES;
 
     public static final String TILE_POS_UNIFORM_NAME = "u_TilePos";
+
+    /**
+     * Name of the uniform which is used to set the {@code mc_Entity} vertex attribute of the captured shader pack geometry.
+     */
+    public static final String MC_ENTITY_UNIFORM_NAME = "u_mcEntity";
+
+    /**
+     * The byte offset of the position attribute in a vertex captured by the shader pack compatibility transform feedback pass.
+     */
+    public static final int SHADER_PACK_XFB_POS_OFFSET = 0;
+    /**
+     * The byte offset of the color attribute in a vertex captured by the shader pack compatibility transform feedback pass.
+     */
+    public static final int SHADER_PACK_XFB_COLOR_OFFSET = SHADER_PACK_XFB_POS_OFFSET + 16;
+    /**
+     * The byte offset of the texture coordinate attribute in a vertex captured by the shader pack compatibility transform feedback pass.
+     */
+    public static final int SHADER_PACK_XFB_UV_OFFSET = SHADER_PACK_XFB_COLOR_OFFSET + 16;
+    /**
+     * The byte offset of the normal attribute in a vertex captured by the shader pack compatibility transform feedback pass.
+     */
+    public static final int SHADER_PACK_XFB_NORMAL_OFFSET = SHADER_PACK_XFB_UV_OFFSET + 16;
+    /**
+     * The byte offset of the lightmap coordinate attribute in a vertex captured by the shader pack compatibility transform feedback pass.
+     */
+    public static final int SHADER_PACK_XFB_LIGHT_OFFSET = SHADER_PACK_XFB_NORMAL_OFFSET + 16;
+    /**
+     * The byte offset of the entity attribute in a vertex captured by the shader pack compatibility transform feedback pass.
+     */
+    public static final int SHADER_PACK_XFB_ENTITY_OFFSET = SHADER_PACK_XFB_LIGHT_OFFSET + 16;
+    /**
+     * The size of a vertex captured by the shader pack compatibility transform feedback pass, in bytes.
+     */
+    public static final int SHADER_PACK_XFB_STRIDE = SHADER_PACK_XFB_ENTITY_OFFSET + 16;
 }

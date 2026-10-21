@@ -200,7 +200,7 @@ public class FP2Client1_12 extends FP2Client {
     @SubscribeEvent
     public void renderWorldLast(RenderWorldLastEvent event) {
         val reversedZ = this.renderManager().reversedZ();
-        if (reversedZ != null) {
+        if (reversedZ != null && reversedZ.isActive()) { //it might not be active if a shader pack is enabled (see fp2_renderWorldPass_pre)
             reversedZ.deactivate();
         }
     }

@@ -26,4 +26,16 @@ import net.daporkchop.fp2.core.client.render.state.CameraState;
  */
 public interface IMixinEntityRenderer1_12 {
     CameraState fp2_cameraState();
+
+    /**
+     * Re-reads the current camera position and matrices from the renderer state.
+     * <p>
+     * This has to be called right before the camera state is consumed (i.e. from {@code RenderGlobal.setupTerrain()}), because
+     * OptiFine's shader pipeline replaces the {@code ICamera.setPosition()} call in {@code EntityRenderer.renderWorldPass()}
+     * with its own {@code ShadersRender.setFrustrumPosition()}, meaning that hooks placed on the former never run when a shader
+     * pack is active.
+     *
+     * @param partialTicks the current partial tick time
+     */
+    void fp2_captureCameraState(float partialTicks);
 }

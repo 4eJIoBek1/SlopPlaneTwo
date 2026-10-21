@@ -23,6 +23,7 @@ import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
 import net.daporkchop.fp2.api.event.Constrain;
 import net.daporkchop.fp2.api.event.FEventHandler;
+import net.daporkchop.fp2.core.client.render.ShaderPackCompat;
 import net.daporkchop.fp2.core.client.render.TextureUVs;
 import net.daporkchop.fp2.api.util.Direction;
 import net.daporkchop.lib.unsafe.PUnsafe;
@@ -51,6 +52,9 @@ public class FP2OptiFine1_12 {
 
         Events events = new Events();
         fp2().eventBus().register(events); //register self to receive fp2 events
+
+        //allow the far terrain to be rendered through the shader pack's own terrain shader program
+        ShaderPackCompat.setRenderer(OFShaderPackRenderer1_12.INSTANCE);
     }
 
     /**

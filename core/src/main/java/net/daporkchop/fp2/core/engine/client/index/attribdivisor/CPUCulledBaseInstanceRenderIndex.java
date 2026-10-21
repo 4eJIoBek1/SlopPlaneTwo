@@ -24,8 +24,10 @@ import lombok.val;
 import net.daporkchop.fp2.common.util.alloc.DirectMemoryAllocator;
 import net.daporkchop.fp2.core.client.IFrustum;
 import net.daporkchop.fp2.core.client.render.GlobalRenderer;
+import net.daporkchop.fp2.core.client.render.ShaderPackCompat;
 import net.daporkchop.fp2.core.client.render.TerrainRenderingBlockedTracker;
 import net.daporkchop.fp2.core.client.render.state.CameraStateUniforms;
+import net.daporkchop.fp2.core.config.FP2Config;
 import net.daporkchop.fp2.core.engine.DirectTilePosAccess;
 import net.daporkchop.fp2.core.engine.EngineConstants;
 import net.daporkchop.fp2.core.engine.TilePos;
@@ -69,6 +71,12 @@ public class CPUCulledBaseInstanceRenderIndex<VertexType extends AttributeStruct
     public static final class Type extends RenderIndexType {
         public Type() {
             super(REQUIRED_EXTENSIONS);
+        }
+
+        @Override
+        public boolean enabled(@NonNull FP2Config config) {
+            //when a shader pack is active, we need to draw tiles individually in order to be able to set the model-view matrix for each of them
+            return !ShaderPackCompat.isActive();
         }
 
         @Override

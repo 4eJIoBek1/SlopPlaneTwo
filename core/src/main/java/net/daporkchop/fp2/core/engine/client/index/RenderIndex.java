@@ -25,6 +25,7 @@ import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import net.daporkchop.fp2.common.util.alloc.DirectMemoryAllocator;
 import net.daporkchop.fp2.core.client.IFrustum;
+import net.daporkchop.fp2.core.client.render.ShaderPackCompat;
 import net.daporkchop.fp2.core.client.render.TerrainRenderingBlockedTracker;
 import net.daporkchop.fp2.core.client.render.state.CameraState;
 import net.daporkchop.fp2.core.client.render.state.CameraStateUniforms;
@@ -247,6 +248,23 @@ public abstract class RenderIndex<VertexType extends AttributeStruct> implements
     public abstract void draw(DrawArguments args, int level, int pass, DrawShaderProgram shader, ShaderProgram.UniformSetter uniformSetter);
 
     /**
+     * Draws the translucent tiles of all currently selected detail levels using the active shader pack's water shader program.
+     * <p>
+     * Unlike {@link #draw}, this isn't part of the regular draw sequence: it must be called while the shader pack is rendering the vanilla translucent
+     * render pass, as its water shader program is only valid at that point in the frame (the pack's deferred pass has already run by then, so the pack will
+     * apply its water shading to the far terrain exactly like it does for vanilla water).
+     * <p>
+     * Render indices which don't support shader pack compatibility will do nothing, as they are never selected while a shader pack is active.
+     *
+     * @param cameraState the current camera state
+     * @param shaderPack  the shader pack renderer
+     * @param xfbProgram  the transform feedback program used to convert FP2's geometry into a shader pack compatible vertex format
+     */
+    public void drawShaderPackWater(@NonNull CameraState cameraState, @NonNull ShaderPackCompat.Renderer shaderPack, @NonNull DrawShaderProgram xfbProgram) {
+        //no-op
+    }
+
+    /**
      * Called after {@link #preDraw(DrawArguments)} and after all calls to {@link #draw}.
      *
      * @param args additional draw-related state
@@ -318,6 +336,11 @@ public abstract class RenderIndex<VertexType extends AttributeStruct> implements
         public final @NonNull TerrainRenderingBlockedTracker blockedTracker;
 
         public final boolean reversedZ;
+
+        /**
+         * The transform feedback program used to convert FP2's geometry into the vertex format expected by shader packs.
+         */
+        public final @NonNull DrawShaderProgram shaderPackXfbProgram;
     }
 
     /**

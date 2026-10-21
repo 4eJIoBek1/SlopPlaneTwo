@@ -73,18 +73,7 @@ vec3 normalVector() {
 }
 
 vec2 texUvFactor(vec3 normal, vec3 pos)  {
-    vec3 delta = pos - fs_in_base_pos;
-
-    vec3 s = sign(normal);
-    normal = -abs(normal);
-
-    //does this have some special name? i have no idea, but i'm pretty proud of it
-    vec2 uv_factor = vec2(0.);
-    uv_factor += vec2(1. - delta.x, -s.y * delta.z) * normal.y;
-    uv_factor += vec2(-s.z * delta.x, delta.y) * normal.z;
-    uv_factor += vec2(s.x * delta.z, delta.y) * normal.x;
-
-    return uv_factor;
+    return texUvFactor(normal, pos, fs_in_base_pos);
 }
 
 vec4 sampleTerrain(vec3 normal)  {

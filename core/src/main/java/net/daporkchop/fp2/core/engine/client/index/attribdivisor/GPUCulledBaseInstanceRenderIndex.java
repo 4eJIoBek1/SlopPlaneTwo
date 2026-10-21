@@ -31,6 +31,7 @@ import net.daporkchop.fp2.common.util.alloc.DirectMemoryAllocator;
 import net.daporkchop.fp2.core.client.FP2Client;
 import net.daporkchop.fp2.core.client.IFrustum;
 import net.daporkchop.fp2.core.client.render.GlobalRenderer;
+import net.daporkchop.fp2.core.client.render.ShaderPackCompat;
 import net.daporkchop.fp2.core.client.render.TerrainRenderingBlockedTracker;
 import net.daporkchop.fp2.core.client.render.state.CameraStateUniforms;
 import net.daporkchop.fp2.core.client.shader.ReloadableShaderProgram;
@@ -158,7 +159,8 @@ public final class GPUCulledBaseInstanceRenderIndex<VertexType extends Attribute
 
         @Override
         public boolean enabled(@NonNull FP2Config config) {
-            return config.performance().gpuFrustumCulling();
+            //when a shader pack is active, we need to draw tiles individually in order to be able to set the model-view matrix for each of them
+            return config.performance().gpuFrustumCulling() && !ShaderPackCompat.isActive();
         }
 
         @Override

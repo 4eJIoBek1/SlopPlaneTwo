@@ -629,6 +629,9 @@ public abstract class ShaderProgram extends GLObject.Normal {
         protected final BlockBindings SSBOs = BlockBindings.createSSBO();
         protected final BlockBindings UBOs = BlockBindings.createUBO();
 
+        protected CharSequence[] transformFeedbackVaryings;
+        protected int transformFeedbackBufferMode;
+
         public final B addShader(@NonNull Shader shader) {
             checkState(this.allowedShaderTypes.contains(shader.type()), "shader type %s isn't allowed (must be one of: %s)", shader.type(), this.allowedShaderTypes);
             checkState(!this.addedShaderTypes.contains(shader.type()), "a %s shader was already added", shader.type());
@@ -657,6 +660,18 @@ public abstract class ShaderProgram extends GLObject.Normal {
             return uncheckedCast(this);
         }
 
+        /**
+         * Configures the program to capture the given shader output variables using transform feedback.
+         *
+         * @param varyings   the names of the output variables to capture, in the order in which they should be written to the buffer
+         * @param bufferMode the transform feedback buffer mode (e.g. {@link OpenGLConstants#GL_INTERLEAVED_ATTRIBS})
+         */
+        public final B transformFeedbackVaryings(@NonNull CharSequence[] varyings, int bufferMode) {
+            this.transformFeedbackVaryings = varyings.clone();
+            this.transformFeedbackBufferMode = bufferMode;
+            return uncheckedCast(this);
+        }
+
         public final S build() throws ShaderLinkageException {
             try (val task = this.buildAsync()) {
                 return task.join();
@@ -676,7 +691,9 @@ public abstract class ShaderProgram extends GLObject.Normal {
         protected abstract S makeProgram();
 
         protected void configurePreLink(S program) {
-            //no-op
+            if (this.transformFeedbackVaryings != null) {
+                this.gl.glTransformFeedbackVaryings(program.id(), this.transformFeedbackVaryings, this.transformFeedbackBufferMode);
+            }
         }
 
         protected void configurePostLink(S program) {

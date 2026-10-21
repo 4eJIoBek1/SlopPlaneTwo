@@ -30,6 +30,7 @@ import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraft.client.renderer.RenderGlobal;
 import net.minecraft.client.renderer.culling.ICamera;
 import net.minecraft.entity.Entity;
+import net.minecraft.util.BlockRenderLayer;
 import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -39,8 +40,10 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Slice;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import static net.daporkchop.fp2.core.FP2Core.*;
+import static net.daporkchop.fp2.impl.mc.forge1_12_2.compat.of.OFHelper1_12.*;
 import static net.daporkchop.lib.common.util.PorkUtil.*;
 
 /**
@@ -106,6 +109,13 @@ abstract class MixinRenderGlobal1_12 implements IMixinRenderGlobal1_12 {
                     args = "ldc=captureFrustum"),
             require = 1, allow = 1)
     private void fp2_setupTerrain_prepare(Entity viewEntity, double partialTicks, ICamera camera, int frameCount, boolean playerSpectator, CallbackInfo ci) {
+        //capture the camera state before using it. this has to happen here rather than in EntityRenderer.renderWorldPass(), because
+        //  optifine's shader pipeline replaces the ICamera.setPosition() call with ShadersRender.setFrustrumPosition() (and the
+        //  RenderGlobal.setupTerrain() call with its own ShadersRender.setupTerrain(), which delegates to this method), so a hook
+        //  on the former would simply never run while a shader pack is active. at this point the matrices have been fully set up
+        //  for terrain rendering in both cases.
+        ((IMixinEntityRenderer1_12) this.mc.entityRenderer).fp2_captureCameraState((float) partialTicks);
+
         fp2().client().currentPlayer().ifPresent(player -> {
             IFarClientContext context = player.activeContext();
             AbstractFarRenderer renderer;
@@ -113,6 +123,26 @@ abstract class MixinRenderGlobal1_12 implements IMixinRenderGlobal1_12 {
                 this.mc.profiler.startSection("fp2_prepare");
                 renderer.prepare(((IMixinEntityRenderer1_12) this.mc.entityRenderer).fp2_cameraState(), (IFrustum) camera);
                 this.mc.profiler.endSection();
+            }
+        });
+    }
+
+    @Inject(method = "Lnet/minecraft/client/renderer/RenderGlobal;renderBlockLayer(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
+            at = @At(value = "HEAD"),
+            require = 1, allow = 1)
+    private void fp2_renderBlockLayer_beforeTranslucent(BlockRenderLayer layer, double partialTicks, int pass, Entity entityIn, CallbackInfoReturnable<Integer> cir) {
+        if (layer != BlockRenderLayer.TRANSLUCENT || of_Shaders_isShadowPass()) {
+            return;
+        }
+
+        //This is called from inside Optifine's water rendering phase: the shader pack's water shader program is active (and its deferred pass has already
+        //  run), so this is where the far terrain's translucent pass has to be drawn. It has to happen before the vanilla translucent chunks are drawn, so
+        //  that vanilla water ends up on top of far terrain water wherever they overlap.
+        fp2().client().currentPlayer().ifPresent(player -> {
+            IFarClientContext context = player.activeContext();
+            AbstractFarRenderer renderer;
+            if (context != null && (renderer = context.renderer()) != null) {
+                renderer.renderShaderPackWater();
             }
         });
     }

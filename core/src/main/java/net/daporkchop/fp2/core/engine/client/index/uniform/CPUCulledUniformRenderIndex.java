@@ -24,7 +24,9 @@ import lombok.val;
 import net.daporkchop.fp2.common.util.alloc.DirectMemoryAllocator;
 import net.daporkchop.fp2.core.client.IFrustum;
 import net.daporkchop.fp2.core.client.render.GlobalRenderer;
+import net.daporkchop.fp2.core.client.render.ShaderPackCompat;
 import net.daporkchop.fp2.core.client.render.TerrainRenderingBlockedTracker;
+import net.daporkchop.fp2.core.client.render.state.CameraState;
 import net.daporkchop.fp2.core.client.render.state.CameraStateUniforms;
 import net.daporkchop.fp2.core.engine.DirectTilePosAccess;
 import net.daporkchop.fp2.core.engine.TilePos;
@@ -36,8 +38,13 @@ import net.daporkchop.fp2.core.engine.client.index.RenderIndexType;
 import net.daporkchop.fp2.gl.GLExtension;
 import net.daporkchop.fp2.gl.GLExtensionSet;
 import net.daporkchop.fp2.gl.OpenGL;
+import net.daporkchop.fp2.gl.attribute.AttributeBuffer;
+import net.daporkchop.fp2.gl.attribute.AttributeFormat;
 import net.daporkchop.fp2.gl.attribute.AttributeStruct;
 import net.daporkchop.fp2.gl.attribute.UniformBuffer;
+import net.daporkchop.fp2.gl.attribute.vao.VertexArrayObject;
+import net.daporkchop.fp2.gl.attribute.vao.VertexArrayVertexBuffer;
+import net.daporkchop.fp2.gl.attribute.vao.VertexAttributeFormat;
 import net.daporkchop.fp2.gl.shader.DrawShaderProgram;
 import net.daporkchop.fp2.gl.shader.ShaderProgram;
 import net.daporkchop.fp2.gl.state.StatePreserver;
@@ -47,6 +54,7 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 import static net.daporkchop.fp2.core.engine.EngineConstants.*;
+import static net.daporkchop.fp2.gl.OpenGLConstants.*;
 import static net.daporkchop.lib.common.util.PorkUtil.*;
 
 /**
@@ -95,8 +103,36 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
     protected final Map<TilePos, BakeStorage.Location[]> allLocations = DirectTilePosAccess.newPositionKeyedHashMap();
     protected final Map<TilePos, BakeStorage.Location[]>[] selectedLocations = uncheckedCast(PArrays.filledFrom(MAX_LODS, Map[]::new, DirectTilePosAccess::newPositionKeyedHashMap));
 
+    /**
+     * The buffer into which tile geometry is captured for shader pack compatibility, or {@code -1} if it hasn't been created yet.
+     */
+    protected int shaderPackCaptureBuffer = -1;
+    /**
+     * The capacity of {@link #shaderPackCaptureBuffer}, in vertices.
+     */
+    protected int shaderPackCaptureCapacity;
+    /**
+     * The vertex array object exposing {@link #shaderPackCaptureBuffer} in the vertex format expected by shader packs, or {@code -1} if it hasn't been
+     * created yet.
+     */
+    protected int shaderPackCaptureVao = -1;
+
     public CPUCulledUniformRenderIndex(OpenGL gl, BakeStorage<VertexType> bakeStorage, DirectMemoryAllocator alloc) {
         super(gl, bakeStorage, alloc);
+    }
+
+    @Override
+    public void close() {
+        try {
+            super.close();
+        } finally {
+            if (this.shaderPackCaptureVao >= 0) {
+                this.gl.glDeleteVertexArray(this.shaderPackCaptureVao);
+            }
+            if (this.shaderPackCaptureBuffer >= 0) {
+                this.gl.glDeleteBuffer(this.shaderPackCaptureBuffer);
+            }
+        }
     }
 
     @Override
@@ -135,37 +171,264 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
     @Override
     public void draw(DrawArguments args, int level, int pass, DrawShaderProgram shader, ShaderProgram.UniformSetter uniformSetter) {
         val selectedLocations = this.selectedLocations[level];
-        if (!selectedLocations.isEmpty()) {
-            int modeEnum = this.bakeStorage.drawMode.mode();
-            val indexFormat = this.bakeStorage.indexFormat.type();
-            int indexType = indexFormat.type();
-            int indexSize = indexFormat.size();
+        if (selectedLocations.isEmpty()) {
+            return;
+        }
 
-            OpenGL gl = this.gl;
-            boolean absoluteIndices = this.bakeStorage.absoluteIndices;
+        ShaderPackCompat.Renderer shaderPack = ShaderPackCompat.renderer();
+        if (shaderPack != null && shaderPack.isActive()) {
+            //a shader pack is active: draw the tiles using the pack's own terrain shader program, so that its custom g-buffer layout is filled
+            //  in correctly and the pack's lighting/fog is applied to our geometry
+            this.drawShaderPack(args, level, pass, selectedLocations, shaderPack);
+            return;
+        }
 
-            gl.glBindVertexArray(this.vaos.get(level, pass).id());
+        int modeEnum = this.bakeStorage.drawMode.mode();
+        val indexFormat = this.bakeStorage.indexFormat.type();
+        int indexType = indexFormat.type();
+        int indexSize = indexFormat.size();
 
-            int uniformLocation = shader.uniformLocation(RenderConstants.TILE_POS_UNIFORM_NAME);
+        OpenGL gl = this.gl;
+        boolean absoluteIndices = this.bakeStorage.absoluteIndices;
+
+        gl.glBindVertexArray(this.vaos.get(level, pass).id());
+
+        int uniformLocation = shader.uniformLocation(RenderConstants.TILE_POS_UNIFORM_NAME);
+
+        selectedLocations.forEach((pos, commands) -> {
+            val command = commands[pass];
+            if (command != null) {
+                uniformSetter.set4i(uniformLocation, pos.x(), pos.y(), pos.z(), pos.level());
+
+                int count = command.count;
+                long indices = command.firstIndex * (long) indexSize;
+
+                if (absoluteIndices) {
+                    //if the indices are absolute, we don't need to pass in the baseVertex parameter and so we can use a draw command
+                    //  with absolutely no feature requirements
+                    gl.glDrawElements(modeEnum, count, indexType, indices);
+                } else {
+                    gl.glDrawElementsBaseVertex(modeEnum, count, indexType, indices, command.baseVertex);
+                }
+            }
+        });
+    }
+
+    /**
+     * Draws the selected tiles using a shader pack's terrain shader program.
+     * <p>
+     * FP2's geometry is first captured using transform feedback into the vertex format which shader packs expect, then drawn like vanilla chunk geometry. This
+     * makes the pack's programs see the far terrain exactly like they see vanilla chunks: with per-vertex normals, block texture coordinates, lightmap
+     * coordinates and block ids, and with all positions relative to the camera.
+     *
+     * @param args              the draw arguments
+     * @param level             the detail level
+     * @param pass              the render pass
+     * @param selectedLocations the selected tile positions and their draw commands
+     * @param shaderPack        the shader pack renderer
+     */
+    protected void drawShaderPack(DrawArguments args, int level, int pass, Map<TilePos, BakeStorage.Location[]> selectedLocations, ShaderPackCompat.Renderer shaderPack) {
+        shaderPack.beginPass(level, pass);
+        try {
+            this.drawShaderPackTiles(level, pass, selectedLocations, shaderPack, args.shaderPackXfbProgram);
+        } finally {
+            shaderPack.endPass(level, pass);
+        }
+    }
+
+    @Override
+    public void drawShaderPackWater(@NonNull CameraState cameraState, @NonNull ShaderPackCompat.Renderer shaderPack, @NonNull DrawShaderProgram xfbProgram) {
+        RenderIndex.DrawableMask drawableMask = this.drawableMask();
+        if (!drawableMask.shouldDrawAnythingForLayer(RenderConstants.LAYER_TRANSPARENT)) {
+            return;
+        }
+
+        //draw from the lowest detail level to the highest, so that the highest-detail tiles (which are drawn last) end up on top. fp2's regular
+        //  transparent pass usually enforces this using the stencil buffer, but that isn't available in the shader pack's g-buffers.
+        for (int level = drawableMask.maxLevelToDraw() - 1; level >= drawableMask.minLevelToDraw(); level--) {
+            if (!drawableMask.shouldDrawAnythingForLevelLayer(level, RenderConstants.LAYER_TRANSPARENT)) {
+                continue;
+            }
+
+            Map<TilePos, BakeStorage.Location[]> selectedLocations = this.selectedLocations[level];
+            if (selectedLocations.isEmpty()) {
+                continue;
+            }
+
+            shaderPack.beginWaterPass(level);
+            try {
+                this.drawShaderPackTiles(level, RenderConstants.LAYER_TRANSPARENT, selectedLocations, shaderPack, xfbProgram);
+            } finally {
+                shaderPack.endWaterPass(level);
+            }
+        }
+    }
+
+    /**
+     * Draws the given tile locations using the shader pack's currently active terrain or water shader program.
+     *
+     * @param level             the detail level
+     * @param pass              the render pass
+     * @param selectedLocations the selected tile positions and their draw commands
+     * @param shaderPack        the shader pack renderer
+     * @param xfbProgram        the transform feedback program used to convert FP2's geometry into a shader pack compatible vertex format
+     */
+    protected void drawShaderPackTiles(int level, int pass, @NonNull Map<TilePos, BakeStorage.Location[]> selectedLocations, @NonNull ShaderPackCompat.Renderer shaderPack, @NonNull DrawShaderProgram xfbProgram) {
+        OpenGL gl = this.gl;
+
+        int modeEnum = this.bakeStorage.drawMode.mode();
+        val indexFormat = this.bakeStorage.indexFormat.type();
+        int indexType = indexFormat.type();
+        int indexSize = indexFormat.size();
+        boolean absoluteIndices = this.bakeStorage.absoluteIndices;
+
+        int captureVao = this.shaderPackCaptureVao(shaderPack);
+        int tilePosUniform = xfbProgram.uniformLocation(RenderConstants.TILE_POS_UNIFORM_NAME);
+        int mcEntityUniform = xfbProgram.uniformLocation(RenderConstants.MC_ENTITY_UNIFORM_NAME);
+
+        //shader packs use the mc_Entity attribute to detect special blocks. fp2's vertex format only stores a per-tile texture index, which can't be mapped
+        //  back to a block state on the GPU, so a constant value is used for all vertices of a pass instead. the translucent pass only ever contains water,
+        //  which is identified by its block id (8/9, as used by Chocapic13) as well as by a metadata value of 1 (as used by SEUS).
+        boolean water = pass == RenderConstants.LAYER_TRANSPARENT;
+        float mcEntityX = water ? 9.0f : 0.0f;
+        float mcEntityY = water ? 1.0f : 0.0f;
+
+        //save the state which we're going to modify. the shader pack's program is bound by the caller, and needs to be restored after every capture.
+        int packProgram = gl.glGetInteger(GL_CURRENT_PROGRAM);
+        int oldVao = gl.glGetInteger(GL_VERTEX_ARRAY_BINDING);
+        boolean oldRasterizerDiscard = gl.glIsEnabled(GL_RASTERIZER_DISCARD);
+
+        try {
+            if (packProgram == 0) { //no shader program is bound, so there is nothing which the captured geometry could be drawn with
+                return;
+            }
+
+            //captures are written to the buffer at binding point 0. the buffer is re-used for every tile, which means that the draw call for a tile's
+            //  captured geometry must be issued before the next tile's capture overwrites it - which is guaranteed by the OpenGL command ordering.
+            gl.glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, this.shaderPackCaptureBuffer);
+
+            val xfbUniformSetter = xfbProgram.bindUnsafe();
+            xfbUniformSetter.set4f(mcEntityUniform, mcEntityX, mcEntityY, 0.0f, 1.0f);
 
             selectedLocations.forEach((pos, commands) -> {
                 val command = commands[pass];
-                if (command != null) {
-                    uniformSetter.set4i(uniformLocation, pos.x(), pos.y(), pos.z(), pos.level());
-
-                    int count = command.count;
-                    long indices = command.firstIndex * (long) indexSize;
-
-                    if (absoluteIndices) {
-                        //if the indices are absolute, we don't need to pass in the baseVertex parameter and so we can use a draw command
-                        //  with absolutely no feature requirements
-                        gl.glDrawElements(modeEnum, count, indexType, indices);
-                    } else {
-                        gl.glDrawElementsBaseVertex(modeEnum, count, indexType, indices, command.baseVertex);
-                    }
+                if (command == null) {
+                    return;
                 }
+
+                this.ensureShaderPackCaptureCapacity(command.count);
+
+                //capture the tile's geometry in the vertex format used by vanilla chunks
+                gl.glUseProgram(xfbProgram.id());
+                xfbUniformSetter.set4i(tilePosUniform, pos.x(), pos.y(), pos.z(), pos.level());
+
+                gl.glBindVertexArray(this.vaos.get(level, pass).id());
+
+                //rasterizer discard must only be enabled for the capture itself. the captured geometry is drawn immediately afterwards, and that draw call
+                //  has to be rasterized just like any other.
+                gl.glEnable(GL_RASTERIZER_DISCARD);
+                gl.glBeginTransformFeedback(GL_TRIANGLES);
+                try {
+                    if (absoluteIndices) {
+                        gl.glDrawElements(modeEnum, command.count, indexType, command.firstIndex * (long) indexSize);
+                    } else {
+                        gl.glDrawElementsBaseVertex(modeEnum, command.count, indexType, command.firstIndex * (long) indexSize, command.baseVertex);
+                    }
+                } finally {
+                    gl.glEndTransformFeedback();
+                    gl.glDisable(GL_RASTERIZER_DISCARD);
+                }
+
+                //draw the captured geometry using the shader pack's program. the captured vertices are already relative to the camera, so the model-view
+                //  matrix must be left untouched (just like vanilla chunk rendering, which performs the camera-relative translation on the CPU).
+                gl.glUseProgram(packProgram);
+                gl.glBindVertexArray(captureVao);
+                gl.glDrawArrays(GL_TRIANGLES, 0, command.count);
             });
+        } finally {
+            gl.glUseProgram(packProgram);
+            gl.glBindVertexArray(oldVao);
+            gl.glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0);
+            if (oldRasterizerDiscard) {
+                gl.glEnable(GL_RASTERIZER_DISCARD);
+            } else {
+                gl.glDisable(GL_RASTERIZER_DISCARD);
+            }
         }
+    }
+
+    /**
+     * Ensures that {@link #shaderPackCaptureBuffer} is large enough to hold the given number of vertices.
+     *
+     * @param vertices the number of vertices which need to fit into the buffer
+     */
+    protected void ensureShaderPackCaptureCapacity(int vertices) {
+        if (vertices <= this.shaderPackCaptureCapacity) {
+            return;
+        }
+
+        int capacity = Math.max(vertices, Math.max(this.shaderPackCaptureCapacity << 1, 16384));
+
+        OpenGL gl = this.gl;
+        int oldBuffer = gl.glGetInteger(GL_ARRAY_BUFFER_BINDING);
+        try {
+            gl.glBindBuffer(GL_ARRAY_BUFFER, this.shaderPackCaptureBuffer);
+            gl.glBufferData(GL_ARRAY_BUFFER, capacity * (long) RenderConstants.SHADER_PACK_XFB_STRIDE, 0L, GL_DYNAMIC_COPY);
+        } finally {
+            gl.glBindBuffer(GL_ARRAY_BUFFER, oldBuffer);
+        }
+
+        this.shaderPackCaptureCapacity = capacity;
+    }
+
+    /**
+     * Gets (and lazily creates) the vertex array object which exposes {@link #shaderPackCaptureBuffer} in the vertex format expected by shader packs.
+     *
+     * @param shaderPack the shader pack renderer
+     * @return the vertex array object's id
+     */
+    protected int shaderPackCaptureVao(@NonNull ShaderPackCompat.Renderer shaderPack) {
+        if (this.shaderPackCaptureVao >= 0) {
+            return this.shaderPackCaptureVao;
+        }
+
+        OpenGL gl = this.gl;
+        if (this.shaderPackCaptureBuffer < 0) {
+            this.shaderPackCaptureBuffer = gl.glGenBuffer();
+        }
+
+        int oldVao = gl.glGetInteger(GL_VERTEX_ARRAY_BINDING);
+        int oldBuffer = gl.glGetInteger(GL_ARRAY_BUFFER_BINDING);
+        int vao = gl.glGenVertexArray();
+        try {
+            gl.glBindVertexArray(vao);
+            gl.glBindBuffer(GL_ARRAY_BUFFER, this.shaderPackCaptureBuffer);
+
+            //the attribute indices are the ones which vanilla chunk rendering uses for its fixed-function vertex attributes, as the pack's programs read those
+            this.shaderPackCaptureAttribute(0, 3, RenderConstants.SHADER_PACK_XFB_POS_OFFSET); //gl_Vertex
+            this.shaderPackCaptureAttribute(2, 3, RenderConstants.SHADER_PACK_XFB_NORMAL_OFFSET); //gl_Normal
+            this.shaderPackCaptureAttribute(3, 4, RenderConstants.SHADER_PACK_XFB_COLOR_OFFSET); //gl_Color
+            this.shaderPackCaptureAttribute(8, 2, RenderConstants.SHADER_PACK_XFB_UV_OFFSET); //gl_MultiTexCoord0
+            this.shaderPackCaptureAttribute(9, 2, RenderConstants.SHADER_PACK_XFB_LIGHT_OFFSET); //gl_MultiTexCoord1 (lightmap coordinates)
+
+            int entityAttribute = shaderPack.entityAttribute();
+            if (entityAttribute >= 0) {
+                this.shaderPackCaptureAttribute(entityAttribute, 4, RenderConstants.SHADER_PACK_XFB_ENTITY_OFFSET); //mc_Entity
+            }
+        } catch (Throwable t) {
+            gl.glDeleteVertexArray(vao);
+            throw t;
+        } finally {
+            gl.glBindBuffer(GL_ARRAY_BUFFER, oldBuffer);
+            gl.glBindVertexArray(oldVao);
+        }
+
+        return this.shaderPackCaptureVao = vao;
+    }
+
+    private void shaderPackCaptureAttribute(int index, int size, int offset) {
+        this.gl.glEnableVertexAttribArray(index);
+        this.gl.glVertexAttribPointer(index, size, GL_FLOAT, false, RenderConstants.SHADER_PACK_XFB_STRIDE, offset);
     }
 
     @Override

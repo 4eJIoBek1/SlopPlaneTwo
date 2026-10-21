@@ -80,19 +80,17 @@ abstract class MixinEntityRenderer1_12 implements IMixinEntityRenderer1_12 {
     @Inject(method = "Lnet/minecraft/client/renderer/EntityRenderer;renderWorldPass(IFJ)V",
             at = @At("HEAD"))
     private void fp2_renderWorldPass_pre(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
+        if (OF && of_Config_isShaders()) {
+            //shader packs don't get along with our reversed-Z projection, as they read the depth buffer assuming the standard
+            //  depth range. the far terrain is therefore rendered with a standard projection and ends up in the shader pack's
+            //  g-buffer along with the rest of the world, where the pack's own shader programs will process it.
+            return;
+        }
+
         val reversedZ = fp2().client().renderManager().reversedZ();
         if (reversedZ != null) {
             reversedZ.activate();
         }
-    }
-
-    @Inject(method = "Lnet/minecraft/client/renderer/EntityRenderer;renderWorldPass(IFJ)V",
-            at = @At(value = "INVOKE",
-                    target = "Lnet/minecraft/client/renderer/culling/ICamera;setPosition(DDD)V",
-                    shift = At.Shift.AFTER),
-            require = 1, allow = 1)
-    private void fp2_renderWorldPass_captureCameraState(int pass, float partialTicks, long finishTimeNano, CallbackInfo ci) {
-        this.fp2_cameraState(this.fp2_cameraState, fp2().client(), partialTicks);
     }
 
     @Inject(method = "Lnet/minecraft/client/renderer/EntityRenderer;renderWorldPass(IFJ)V",
@@ -106,22 +104,35 @@ abstract class MixinEntityRenderer1_12 implements IMixinEntityRenderer1_12 {
 
         fp2().client().currentPlayer().ifPresent(player -> {
             IFarClientContext context = player.activeContext();
-            AbstractFarRenderer renderer;
-            if (context != null && (renderer = context.renderer()) != null) {
-                this.mc.profiler.startSection("fp2_render");
-
-                GlStateManager.disableAlpha();
-                ((ATMinecraft1_12) this.mc).getTextureMapBlocks().setBlurMipmapDirect(false, this.mc.gameSettings.mipmapLevels > 0);
-
-                //actually render stuff!
-                //TODO: we assume that the camera state hasn't changed... maybe we should add an assertion?
-                renderer.render(this.fp2_cameraState, this.fp2_drawState());
-
-                ((ATMinecraft1_12) this.mc).getTextureMapBlocks().restoreLastBlurMipmap();
-                GlStateManager.enableAlpha();
-
-                this.mc.profiler.endSection();
+            if (context == null) {
+                return;
             }
+
+            AbstractFarRenderer renderer = context.renderer();
+            if (renderer != null && renderer.needsReloadForShaderPackChange()) {
+                //shader pack compatibility requires a render index implementation which draws each tile individually, but the render index is selected when
+                //  the renderer is created. recreate the renderer here (outside of rendering, as reloading closes the renderer!) to switch between the
+                //  normal and shader pack compatible render paths when the shader pack is enabled or disabled.
+                context.reloadRenderer();
+                renderer = context.renderer();
+            }
+            if (renderer == null) {
+                return;
+            }
+
+            this.mc.profiler.startSection("fp2_render");
+
+            GlStateManager.disableAlpha();
+            ((ATMinecraft1_12) this.mc).getTextureMapBlocks().setBlurMipmapDirect(false, this.mc.gameSettings.mipmapLevels > 0);
+
+            //actually render stuff!
+            //TODO: we assume that the camera state hasn't changed... maybe we should add an assertion?
+            renderer.render(this.fp2_cameraState, this.fp2_drawState());
+
+            ((ATMinecraft1_12) this.mc).getTextureMapBlocks().restoreLastBlurMipmap();
+            GlStateManager.enableAlpha();
+
+            this.mc.profiler.endSection();
         });
     }
 
@@ -210,6 +221,29 @@ abstract class MixinEntityRenderer1_12 implements IMixinEntityRenderer1_12 {
         assert zNear == 0.05f : zNear;
         this.fp2_cameraState.zNear = zNear;
 
+        if (OF && of_Config_isShaders()) {
+            //a shader pack is active: it assumes a standard depth range with a finite far plane and derives all of its
+            //  depth-based effects (fog, water, SSAO, sky detection, ...) from the projection matrix, so we use vanilla's
+            //  projection. this is the exact matrix Project.gluPerspective() would have written, but we build it by hand
+            //  instead of calling the original method, because this redirect is applied to every method in EntityRenderer -
+            //  calling it from within the handler would redirect our own call (i.e. recurse until the stack overflows).
+            FloatBuffer dst = (FloatBuffer) this.fp2_tempMatrix.clear();
+            for (int i = 0; i < MatrixHelper.MAT4_ELEMENTS; i++) {
+                dst.put(i, 0.0f);
+            }
+
+            //these are the exact matrix values written by Project.gluPerspective(fov, aspect, zNear, zFar)
+            float f = (float) (1.0d / Math.tan(Math.toRadians(fov) * 0.5d));
+            float deltaZ = zFar - zNear;
+            dst.put(0, f / aspect);
+            dst.put(5, f);
+            dst.put(10, -(zFar + zNear) / deltaZ);
+            dst.put(11, -1.0f); //m[3][2]
+            dst.put(14, -2.0f * zNear * zFar / deltaZ); //m[2][3]
+            glMultMatrix(dst);
+            return;
+        }
+
         MatrixHelper.reversedZ((FloatBuffer) this.fp2_tempMatrix.clear(), fov, aspect, zNear);
         glMultMatrix(this.fp2_tempMatrix);
     }
@@ -226,6 +260,14 @@ abstract class MixinEntityRenderer1_12 implements IMixinEntityRenderer1_12 {
             FP2Config config = context.config();
             farPlaneDistance = config.effectiveRenderDistanceBlocks();
             //TODO: i need a better system for computing this
+
+            if (OF && of_Config_isShaders()) {
+                //a shader pack is active: the configured render distance is far larger than the far terrain actually extends,
+                //  and a shader pack's depth buffer would be useless if its far plane were placed beyond it (everything except
+                //  the few blocks closest to the camera would end up squeezed into the last depth values). we therefore clamp
+                //  the far plane to a distance which is comfortably larger than any far terrain level containing actual data.
+                farPlaneDistance = Math.min(farPlaneDistance, 16384.0f);
+            }
         }
 
         this.farPlaneDistance = farPlaneDistance;
@@ -257,5 +299,10 @@ abstract class MixinEntityRenderer1_12 implements IMixinEntityRenderer1_12 {
     @Override
     public final CameraState fp2_cameraState() {
         return this.fp2_cameraState;
+    }
+
+    @Override
+    public final void fp2_captureCameraState(float partialTicks) {
+        this.fp2_cameraState(this.fp2_cameraState, fp2().client(), partialTicks);
     }
 }
