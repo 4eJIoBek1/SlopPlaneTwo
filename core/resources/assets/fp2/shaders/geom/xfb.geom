@@ -15,6 +15,7 @@
  * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
  * BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+ *
  */
 
 #pragma once
@@ -39,13 +40,19 @@ layout(triangle_strip, max_vertices = 3) out;
 //
 
 //these are captured using transform feedback, and then drawn as if they were regular vanilla chunk vertices (in the format expected by shader packs).
-//  all of them are vec4s so that the transform feedback buffer layout is unambiguous (16 bytes per variable, in declaration order).
+//  the variables are packed as tightly as possible while keeping the per-vertex layout well-defined: the total stride is 40 bytes, laid out as
+//  follows (see the SHADER_PACK_XFB_*_OFFSET constants in RenderConstants):
+//
+//      @0  pos      vec4   (xyz = camera-relative position, w unused)
+//      @16 color    uvec2  (x = rgba as four unsigned bytes, y = normal as three signed bytes)
+//      @24 uv       vec2   (texture coordinates in the block texture atlas)
+//      @32 misc     uvec2  (x = lightmap coordinates as two unsigned shorts, y = block id and metadata as four unsigned bytes)
+//
+//  the uvec2 variables rely on little-endian byte order, which is the only architecture fp2 runs on anyway.
 out vec4 xfb_pos; //xyz = camera-relative position
-out vec4 xfb_color; //rgba = vertex color (texture tint * face shading)
-out vec4 xfb_uv; //xy = texture coordinates in the block texture atlas
-out vec4 xfb_normal; //xyz = face normal
-out vec4 xfb_light; //xy = lightmap coordinates (as 0-255 floats, like vanilla)
-out vec4 xfb_entity; //x = block id, y = block metadata (as used by shader packs)
+out uvec2 xfb_colorNormal; //x = rgba = vertex color (texture tint * face shading), y = xyz = face normal
+out vec2 xfb_uv; //xy = texture coordinates in the block texture atlas
+out uvec2 xfb_misc; //x = xy = lightmap coordinates (as 0-255 integers, like vanilla), y = xyzw = block id and metadata (mc_Entity)
 
 //
 //
@@ -78,6 +85,16 @@ vec3 normalVector() {
     return normalize(cross(gs_in[1].pos - gs_in[0].pos, gs_in[2].pos - gs_in[0].pos));
 }
 
+//packs a value in the range [0, 1] into an unsigned byte
+uint packUnorm8(float value) {
+    return uint(round(clamp(value, 0.0, 1.0) * 255.0));
+}
+
+//packs a value in the range [-1, 1] into a signed byte (the result is the byte's bit pattern, as an unsigned integer)
+uint packSnorm8(float value) {
+    return uint(int(round(clamp(value, -1.0, 1.0) * 127.0))) & 0xFFu;
+}
+
 void main() {
     gs_fetchInputs();
 
@@ -103,13 +120,22 @@ void main() {
     //  (the latter is baked into the vertex color by the fragment shader path as well)
     vec3 vertexColor = max(gs_in[PROVOKING].color, vec3(quad.tint)) * diffuseLight(normal);
 
+    //pack the values which are constant for the whole triangle
+    uint packedColor = packUnorm8(vertexColor.r) | (packUnorm8(vertexColor.g) << 8) | (packUnorm8(vertexColor.b) << 16) | (255u << 24);
+    uint packedNormal = packSnorm8(normal.x) | (packSnorm8(normal.y) << 8) | (packSnorm8(normal.z) << 16);
+    uint packedEntity = (uint(round(clamp(u_mcEntity.x, 0.0, 255.0))) & 0xFFu)
+            | ((uint(round(clamp(u_mcEntity.y, 0.0, 255.0))) & 0xFFu) << 8)
+            | ((uint(round(clamp(u_mcEntity.z, 0.0, 255.0))) & 0xFFu) << 16)
+            | ((uint(round(clamp(u_mcEntity.w, 0.0, 255.0))) & 0xFFu) << 24);
+
     for (int i = 0; i < 3; i++) {
+        //fp2 stores the lightmap coordinates normalized, but vanilla (and shader packs) use the 0-255 range
+        uint packedLight = packUnorm8(gs_in[i].light.x) | (packUnorm8(gs_in[i].light.y) << 16);
+
         xfb_pos = vec4(gs_in[i].pos, 1.0);
-        xfb_color = vec4(vertexColor, 1.0);
-        xfb_uv = vec4(mix(quadCoords.st, quadCoords.pq, clamp(factors[i] - factorOffset, 0.0, 1.0)), 0.0, 1.0);
-        xfb_normal = vec4(normal, 0.0);
-        xfb_light = vec4(gs_in[i].light * 255.0, 0.0, 1.0); //fp2 stores the lightmap coordinates normalized, but vanilla (and shader packs) use the 0-255 range
-        xfb_entity = u_mcEntity;
+        xfb_colorNormal = uvec2(packedColor, packedNormal);
+        xfb_uv = mix(quadCoords.st, quadCoords.pq, clamp(factors[i] - factorOffset, 0.0, 1.0));
+        xfb_misc = uvec2(packedLight, packedEntity);
 
         gl_Position = gl_in[i].gl_Position;
         EmitVertex();

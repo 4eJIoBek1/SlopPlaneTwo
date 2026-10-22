@@ -101,7 +101,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
          * {@link RenderConstants}.
          */
         private static final String[] XFB_OUTPUT_VARIABLES = {
-                "xfb_pos", "xfb_color", "xfb_uv", "xfb_normal", "xfb_light", "xfb_entity"
+                "xfb_pos", "xfb_colorNormal", "xfb_uv", "xfb_misc"
         };
 
         final @NonNull FP2Config.Debug.DebugColorMode debugColorMode;
@@ -398,16 +398,21 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
      * @param frustum the current view frustum
      */
     public void prepare(@NonNull CameraState cameraState, @NonNull IFrustum frustum) {
-        this.bufferUploader.tick();
-        this.bakeManager.tick(this.bufferUploader, this.bakeStorage, this.renderIndex);
+        long profilerStart = System.nanoTime();
+        try {
+            this.bufferUploader.tick();
+            this.bakeManager.tick(this.bufferUploader, this.bakeStorage, this.renderIndex);
 
-        //update camera state uniforms
-        try (val uniforms = this.cameraStateUniformsBuffer.update()) {
-            cameraState.configureUniforms(uniforms);
-        }
+            //update camera state uniforms
+            try (val uniforms = this.cameraStateUniformsBuffer.update()) {
+                cameraState.configureUniforms(uniforms);
+            }
 
-        try (val ignored = this.statePreserverSelect.backup()) { //back up opengl state prior to selecting
-            this.renderIndex.select(frustum, this.levelRenderer.blockedTracker());
+            try (val ignored = this.statePreserverSelect.backup()) { //back up opengl state prior to selecting
+                this.renderIndex.select(frustum, this.levelRenderer.blockedTracker());
+            }
+        } finally {
+            RenderProfiler.prepare(System.nanoTime() - profilerStart);
         }
     }
 
@@ -450,6 +455,15 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
     }
 
     public void render(@NonNull CameraState cameraState, @NonNull DrawState drawState) {
+        long profilerStart = System.nanoTime();
+        try {
+            this.render0(cameraState, drawState);
+        } finally {
+            RenderProfiler.render(System.nanoTime() - profilerStart);
+        }
+    }
+
+    private void render0(@NonNull CameraState cameraState, @NonNull DrawState drawState) {
         this.shaderPackWaterCameraState = null; //reset the pending translucent pass draw, it will be re-initialized below if needed
         this.shaderPackXfbShaderProgram = null;
 

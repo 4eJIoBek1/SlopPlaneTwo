@@ -136,6 +136,7 @@ public final class FP2Config implements Cloneable<FP2Config> {
         return new FP2Config(
                 Math.min(serverConfig.maxLevels, clientConfig.maxLevels),
                 Math.min(serverConfig.cutoffDistance, clientConfig.cutoffDistance),
+                Math.min(serverConfig.netherMaxLevels, clientConfig.netherMaxLevels),
                 serverConfig.performance,
                 serverConfig.compatibility,
                 serverConfig.quality,
@@ -153,6 +154,20 @@ public final class FP2Config implements Cloneable<FP2Config> {
     @Config.GuiShowServerValue
     private final int cutoffDistance;
 
+    /**
+     * The maximum number of detail levels to use in dimensions which don't have a rough generator.
+     * <p>
+     * Without a rough generator, tiles at detail levels above 0 have to be built by scaling vanilla chunks, which means that every detail level requires
+     * the vanilla chunks for the whole area covered by its tiles - each additional level multiplies the number of chunks which have to be generated (and
+     * stored in the world save!) by four. The nether is the main case where this happens, as it intentionally doesn't have a rough generator (the far
+     * terrain there needs to show glowstone, fortresses and the like, and the vanilla generator is fast enough for the short distances involved), so its
+     * detail levels are limited separately.
+     */
+    @Config.Range(min = @Config.Constant(1), max = @Config.Constant(field = "net.daporkchop.fp2.core.engine.EngineConstants#MAX_LODS"))
+    @Config.GuiCategory(CATEGORY_RENDER_DISTANCE)
+    @Config.GuiShowServerValue
+    private final int netherMaxLevels;
+
     private final @NonNull Performance performance;
     private final @NonNull Compatibility compatibility;
     private final @NonNull Quality quality;
@@ -161,6 +176,7 @@ public final class FP2Config implements Cloneable<FP2Config> {
     private FP2Config() {
         this.maxLevels = 3;
         this.cutoffDistance = 256;
+        this.netherMaxLevels = 2;
 
         this.performance = new Performance();
         this.compatibility = new Compatibility();
@@ -190,6 +206,7 @@ public final class FP2Config implements Cloneable<FP2Config> {
         return new FP2Config(
                 this.maxLevels,
                 this.cutoffDistance,
+                this.netherMaxLevels,
                 this.performance.clone(),
                 this.compatibility.clone(),
                 this.quality.clone(),

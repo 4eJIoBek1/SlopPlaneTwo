@@ -233,6 +233,10 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
      * @param renderIndex    the {@link RenderIndex} to notify of changed tiles
      */
     public void tick(@NonNull BufferUploader bufferUploader, @NonNull BakeStorage<VertexType> bakeStorage, @NonNull RenderIndex<VertexType> renderIndex) {
+        long profilerStart = System.nanoTime();
+        int profilerTiles = 0;
+        long profilerBytes = 0L;
+        try {
         final int dataUpdatesCount = this.pendingDataUpdates.size();
         if (dataUpdatesCount != 0) {
             final long availableBufferUploaderCapacity = bufferUploader.estimateCapacity();
@@ -270,6 +274,8 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
                 }
 
                 //execute the bulk tile data update
+                profilerTiles += dataUpdates.size();
+                profilerBytes += dataUploadSize;
                 bakeStorage.update(dataUpdates);
                 renderIndex.notifyTilesChanged(dataUpdates.keySet());
                 bufferUploader.flush();
@@ -291,6 +297,9 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
                 (this.pendingRenderableUpdates.remove(pos) ? shown : hidden).add(pos);
             }
             renderIndex.updateHidden(hidden, shown);
+        }
+        } finally {
+            RenderProfiler.bake(System.nanoTime() - profilerStart, profilerTiles, profilerBytes);
         }
     }
 }

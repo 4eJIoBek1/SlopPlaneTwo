@@ -142,6 +142,14 @@ public class VanillaExactFBlockLevelHolder1_12 extends AbstractChunksExactFBlock
                 }
 
                 this.io.saveChunk(this.world, chunk);
+
+                if (!this.world.provider.hasSkyLight()) {
+                    //vanilla's lighting code is completely clueless in dimensions without skylight: checkLight() above only sets the isLightPopulated flag and
+                    //  leaves the block light at zero, and a chunk which was loaded from disk is never relit again. since fp2 generates chunks which are far
+                    //  away from any player (and therefore never ticked by the vanilla light engine), the chunk has to be lit manually - otherwise it will be
+                    //  rendered with no light at all (the nether's lava oceans are the most obvious example)
+                    ExactChunkRelightQueue1_12.enqueue(this.world, x, z);
+                }
             }).join();
         }
     }

@@ -83,6 +83,9 @@ fp2.config.menu.maxLevels.tooltip=The number of detail levels to use.\nThe first
 fp2.config.menu.cutoffDistance=Cutoff Distance
 fp2.config.menu.cutoffDistance.valueFormat=%s blocks
 fp2.config.menu.cutoffDistance.tooltip=The radius (in blocks) of the maximum detail level.\nThis value is doubled for each subsequent level, so a value of 256 will mean a 256 block radius for the maximum detail level, a 512 block radius for the 1/2-detail level, a 1024 block radius for the 1/4-detail level, etc.
+fp2.config.menu.netherMaxLevels=Nether LoD Levels
+fp2.config.menu.netherMaxLevels.valueFormat=%s levels
+fp2.config.menu.netherMaxLevels.tooltip=The number of detail levels to use in dimensions which don't have a rough generator (i.e. the nether).\nThose dimensions use exact (vanilla) generation for their far terrain, so every additional level quadruples the number of chunks which have to be generated and stored in the world save.\nThis value is capped by §o<LoD Levels>§r.
 
 fp2.config.menu.labelEquivalentRenderDistance=Render Distance Equivalent: %1$s blocks (%2$s chunks)
 fp2.config.menu.labelApproximatePerformance=Estimated performance gain: %1$sx

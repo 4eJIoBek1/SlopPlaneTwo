@@ -154,6 +154,9 @@ public class FP2Vanilla1_12 {
         }
     }
 
+    //the nether intentionally has no rough generator: the far terrain there has to show glowstone, fortresses, lava falls and the like, and the vanilla
+    //  generator is fast enough for the short distances at which the nether is actually visible
+
     //tile providers
 
     @FEventHandler(name = "vanilla_tileprovider")

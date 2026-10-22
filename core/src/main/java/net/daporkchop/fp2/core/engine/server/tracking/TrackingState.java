@@ -42,7 +42,11 @@ public class TrackingState {
         return new TrackingState(pos.x(), pos.y(), pos.z(),
                 asrRound(config.cutoffDistance(), shift),
                 FP2_DEBUG && !config.debug().levelZeroTracking() ? 1 : 0,
-                config.maxLevels());
+                //dimensions without a rough generator have to build every detail level from vanilla chunks, so their level count is limited separately
+                //  (see FP2Config#netherMaxLevels)
+                context.tileProvider().generatorRough() != null
+                        ? config.maxLevels()
+                        : Math.min(config.maxLevels(), config.netherMaxLevels()));
     }
 
     protected final double x;
