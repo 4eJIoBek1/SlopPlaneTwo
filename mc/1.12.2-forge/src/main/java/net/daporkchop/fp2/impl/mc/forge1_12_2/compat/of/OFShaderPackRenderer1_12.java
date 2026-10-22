@@ -59,6 +59,11 @@ public final class OFShaderPackRenderer1_12 implements ShaderPackCompat.Renderer
     }
 
     @Override
+    public boolean isShadowPass() {
+        return of_Shaders_isShadowPass();
+    }
+
+    @Override
     public void beginPass(int level, int pass) {
         //OptiFine caches the currently active program. As FP2 binds its own shader programs for drawing, OptiFine's cache thinks that its terrain
         //  program is still active, which would cause the "begin" call below to do nothing! Switching to a different program first makes OptiFine

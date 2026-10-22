@@ -455,6 +455,15 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
 
         RenderIndex.DrawableMask drawableMask = this.renderIndex.drawableMask();
 
+        if (ShaderPackCompat.isActive()) {
+            ShaderPackCompat.Renderer shaderPack = ShaderPackCompat.renderer();
+            if (shaderPack != null && shaderPack.isShadowPass()) {
+                //the shader pack's shadow area only covers a small part of the world around the player, which is entirely covered by the finest detail
+                //  level. the rest of the far terrain would have to be captured and drawn a second time without contributing any visible shadows, so skip it.
+                drawableMask = drawableMask.copyOfLevelRange(drawableMask.minLevelToDraw(), Math.min(drawableMask.minLevelToDraw() + 1, EngineConstants.MAX_LODS));
+            }
+        }
+
         if (FP2_DEBUG && !this.fp2.globalConfig().debug().levelZeroRendering()) {
             //if level-zero rendering is turned off, use a mask with level 0 disabled
             drawableMask = drawableMask.copyOfLevelRange(1, EngineConstants.MAX_LODS);

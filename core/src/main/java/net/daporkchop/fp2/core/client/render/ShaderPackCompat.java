@@ -62,6 +62,18 @@ public final class ShaderPackCompat {
         }
 
         /**
+         * Checks whether the pack is currently rendering its shadow map.
+         * <p>
+         * Only a small part of the world around the player is covered by the pack's shadow map, so the far terrain is only rendered up to the finest detail
+         * level while this returns {@code true}.
+         *
+         * @return whether the pack is currently rendering its shadow map
+         */
+        default boolean isShadowPass() {
+            return false;
+        }
+
+        /**
          * Called before drawing the tiles of the given detail level and render pass.
          *
          * @param level the detail level

@@ -116,6 +116,20 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
      * created yet.
      */
     protected int shaderPackCaptureVao = -1;
+    /**
+     * The maximum number of vertices which are captured in a single batch.
+     * <p>
+     * Capturing and drawing tiles costs a fixed amount of CPU time per batch (the transform feedback setup and the program switches), but the geometry of
+     * every tile has to be captured before it can be drawn, which means that the capture buffer needs to be able to hold a whole batch. Batching a couple
+     * hundred thousand vertices (24 MiB with the current vertex stride) is a good compromise between the two.
+     */
+    protected static final int SHADER_PACK_CAPTURE_BATCH_VERTICES = 256 << 10;
+
+    /**
+     * Scratch arrays holding the tile positions and draw commands which are drawn by {@link #drawShaderPackTiles}, in the order in which they're drawn.
+     */
+    protected TilePos[] shaderPackTilePositions = new TilePos[0];
+    protected BakeStorage.Location[] shaderPackTileCommands = new BakeStorage.Location[0];
 
     public CPUCulledUniformRenderIndex(OpenGL gl, BakeStorage<VertexType> bakeStorage, DirectMemoryAllocator alloc) {
         super(gl, bakeStorage, alloc);
@@ -298,41 +312,71 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
         int oldVao = gl.glGetInteger(GL_VERTEX_ARRAY_BINDING);
         boolean oldRasterizerDiscard = gl.glIsEnabled(GL_RASTERIZER_DISCARD);
 
+        //gather the tiles which actually have geometry in this pass
+        if (this.shaderPackTilePositions.length < selectedLocations.size()) {
+            int length = Math.max(selectedLocations.size(), this.shaderPackTilePositions.length << 1);
+            this.shaderPackTilePositions = new TilePos[length];
+            this.shaderPackTileCommands = new BakeStorage.Location[length];
+        }
+        TilePos[] tilePositions = this.shaderPackTilePositions;
+        BakeStorage.Location[] tileCommands = this.shaderPackTileCommands;
+        int tileCount = 0;
+        for (val entry : selectedLocations.entrySet()) {
+            val command = entry.getValue()[pass];
+            if (command != null) {
+                tilePositions[tileCount] = entry.getKey();
+                tileCommands[tileCount] = command;
+                tileCount++;
+            }
+        }
+        if (tileCount == 0) {
+            return;
+        }
+
         try {
             if (packProgram == 0) { //no shader program is bound, so there is nothing which the captured geometry could be drawn with
                 return;
             }
 
-            //captures are written to the buffer at binding point 0. the buffer is re-used for every tile, which means that the draw call for a tile's
-            //  captured geometry must be issued before the next tile's capture overwrites it - which is guaranteed by the OpenGL command ordering.
-            gl.glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, this.shaderPackCaptureBuffer);
+            int fp2Vao = this.vaos.get(level, pass).id();
+            int tileIndex = 0;
+            while (tileIndex < tileCount) {
+                //gather as many tiles as fit into a single batch. all of the tiles in a batch are captured one after another (transform feedback appends
+                //  the emitted vertices to the capture buffer in draw order), and then drawn using a single draw call.
+                int batchEnd = tileIndex;
+                long batchVertices = 0L;
+                do {
+                    batchVertices += tileCommands[batchEnd].count;
+                    batchEnd++;
+                } while (batchEnd < tileCount && batchVertices + tileCommands[batchEnd].count <= SHADER_PACK_CAPTURE_BATCH_VERTICES);
 
-            val xfbUniformSetter = xfbProgram.bindUnsafe();
-            xfbUniformSetter.set4f(mcEntityUniform, mcEntityX, mcEntityY, 0.0f, 1.0f);
+                this.ensureShaderPackCaptureCapacity((int) batchVertices);
 
-            selectedLocations.forEach((pos, commands) -> {
-                val command = commands[pass];
-                if (command == null) {
-                    return;
-                }
+                //captures are written to the buffer at binding point 0
+                gl.glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, this.shaderPackCaptureBuffer);
+                gl.glBindVertexArray(fp2Vao);
 
-                this.ensureShaderPackCaptureCapacity(command.count);
-
-                //capture the tile's geometry in the vertex format used by vanilla chunks
-                gl.glUseProgram(xfbProgram.id());
-                xfbUniformSetter.set4i(tilePosUniform, pos.x(), pos.y(), pos.z(), pos.level());
-
-                gl.glBindVertexArray(this.vaos.get(level, pass).id());
+                val xfbUniformSetter = xfbProgram.bindUnsafe();
+                xfbUniformSetter.set4f(mcEntityUniform, mcEntityX, mcEntityY, 0.0f, 1.0f);
 
                 //rasterizer discard must only be enabled for the capture itself. the captured geometry is drawn immediately afterwards, and that draw call
-                //  has to be rasterized just like any other.
+                //  has to be rasterized just like any other. a single transform feedback pass covers the whole batch, which is significantly cheaper than
+                //  starting and stopping transform feedback once per tile.
                 gl.glEnable(GL_RASTERIZER_DISCARD);
                 gl.glBeginTransformFeedback(GL_TRIANGLES);
                 try {
-                    if (absoluteIndices) {
-                        gl.glDrawElements(modeEnum, command.count, indexType, command.firstIndex * (long) indexSize);
-                    } else {
-                        gl.glDrawElementsBaseVertex(modeEnum, command.count, indexType, command.firstIndex * (long) indexSize, command.baseVertex);
+                    for (int i = tileIndex; i < batchEnd; i++) {
+                        val pos = tilePositions[i];
+                        val command = tileCommands[i];
+
+                        //capture the tile's geometry in the vertex format used by vanilla chunks
+                        xfbUniformSetter.set4i(tilePosUniform, pos.x(), pos.y(), pos.z(), pos.level());
+
+                        if (absoluteIndices) {
+                            gl.glDrawElements(modeEnum, command.count, indexType, command.firstIndex * (long) indexSize);
+                        } else {
+                            gl.glDrawElementsBaseVertex(modeEnum, command.count, indexType, command.firstIndex * (long) indexSize, command.baseVertex);
+                        }
                     }
                 } finally {
                     gl.glEndTransformFeedback();
@@ -343,8 +387,10 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
                 //  matrix must be left untouched (just like vanilla chunk rendering, which performs the camera-relative translation on the CPU).
                 gl.glUseProgram(packProgram);
                 gl.glBindVertexArray(captureVao);
-                gl.glDrawArrays(GL_TRIANGLES, 0, command.count);
-            });
+                gl.glDrawArrays(GL_TRIANGLES, 0, (int) batchVertices);
+
+                tileIndex = batchEnd;
+            }
         } finally {
             gl.glUseProgram(packProgram);
             gl.glBindVertexArray(oldVao);
