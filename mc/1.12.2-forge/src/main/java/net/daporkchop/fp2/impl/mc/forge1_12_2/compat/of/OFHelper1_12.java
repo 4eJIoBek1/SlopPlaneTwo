@@ -107,6 +107,7 @@ public class OFHelper1_12 {
 
     private static final Field OF_SHADERS_ISSHADOWPASS_FIELD = !OF ? null : field("net.optifine.shaders.Shaders", "isShadowPass");
     private static final Field OF_SHADERS_PROGRAMWATER_FIELD = !OF ? null : field("net.optifine.shaders.Shaders", "ProgramWater");
+    private static final Field OF_SHADERS_PROGRAMTERRAIN_FIELD = !OF ? null : field("net.optifine.shaders.Shaders", "ProgramTerrain");
     private static final Method OF_PROGRAM_GETID = !OF ? null : method("net.optifine.shaders.Program", "getId");
 
     public static final String OF_DEFINE_SHADERS = "OPTIFINE_SHADERS";
@@ -173,6 +174,24 @@ public class OFHelper1_12 {
         }
         try {
             Object program = OF_SHADERS_PROGRAMWATER_FIELD.get(null);
+            return program == null ? -1 : (int) OF_PROGRAM_GETID.invoke(program);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /**
+     * Gets the id of Optifine's terrain shader program.
+     *
+     * @return the program's OpenGL id, or {@code 0} if the program isn't available (e.g. Optifine's {@code (internal)} pack, which doesn't contain any
+     * shader sources, or a pack whose terrain program failed to compile), or {@code -1} if Optifine isn't available
+     */
+    public static int of_Shaders_programTerrainId() {
+        if (!OF) {
+            return -1;
+        }
+        try {
+            Object program = OF_SHADERS_PROGRAMTERRAIN_FIELD.get(null);
             return program == null ? -1 : (int) OF_PROGRAM_GETID.invoke(program);
         } catch (Throwable t) {
             return -1;

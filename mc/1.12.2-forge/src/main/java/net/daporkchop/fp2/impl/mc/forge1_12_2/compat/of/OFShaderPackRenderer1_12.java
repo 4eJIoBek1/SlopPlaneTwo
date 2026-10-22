@@ -45,7 +45,11 @@ public final class OFShaderPackRenderer1_12 implements ShaderPackCompat.Renderer
 
     @Override
     public boolean isActive() {
-        return OF && of_Config_isShaders();
+        //Optifine's "(internal)" pack resolves its shader sources from Optifine's own classpath, which contains none - all of its programs therefore end up
+        //  with an id of 0, and drawing through them silently does nothing (the captured geometry uses generic vertex attributes, which the fixed-function
+        //  pipeline ignores, while vanilla chunks still draw because they use fixed-function client arrays). a pack whose terrain program failed to compile
+        //  behaves the same way, so both fall back to fp2's own shaders instead of losing the far terrain entirely.
+        return OF && of_Config_isShaders() && of_Shaders_programTerrainId() > 0;
     }
 
     @Override

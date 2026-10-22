@@ -531,8 +531,9 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
                     this.shaderPackWaterCameraState = cameraState;
                     this.shaderPackXfbShaderProgram = capturedShaderPrograms.xfbShaderProgram;
                 } else if (shaderPack != null) {
-                    //the pack doesn't have a usable water shader program, so draw the translucent geometry as part of the regular opaque pass instead -
-                    //  there is no point in deferring it to the water pass, as there would be no program to draw it with
+                    //the pack doesn't have a usable water shader program (e.g. Optifine's "(internal)" pack, which has no shader sources at all), so draw the
+                    //  translucent geometry as part of the regular opaque pass instead - there is no point in deferring it to the water pass, as there would be
+                    //  no program to draw it with
                     for (int level = drawableMask.minLevelToDraw(); level < drawableMask.maxLevelToDraw(); level++) {
                         if (drawableMask.shouldDrawAnythingForLevelLayer(level, RenderConstants.LAYER_TRANSPARENT)) {
                             this.renderShaderPackTransparent(drawArguments, capturedShaderPrograms, level);
