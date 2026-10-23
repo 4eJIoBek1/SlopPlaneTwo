@@ -22,15 +22,11 @@ package net.daporkchop.fp2.impl.mc.forge1_12_2.asm.core.world;
 import net.daporkchop.fp2.impl.mc.forge1_12_2.FP2Forge1_12;
 import net.daporkchop.fp2.impl.mc.forge1_12_2.asm.interfaz.server.IMixinMinecraftServer1_12;
 import net.daporkchop.fp2.impl.mc.forge1_12_2.asm.interfaz.world.IMixinWorldServer1_12;
-import net.daporkchop.fp2.impl.mc.forge1_12_2.compat.vanilla.exactfblocklevel.ExactChunkRelightQueue1_12;
 import net.daporkchop.fp2.impl.mc.forge1_12_2.server.world.level.FLevelServer1_12;
 import net.daporkchop.lib.common.util.PorkUtil;
 import net.minecraft.world.WorldServer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
-import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 import static net.daporkchop.lib.common.util.PValidation.*;
 import static net.daporkchop.lib.common.util.PorkUtil.*;
@@ -67,11 +63,5 @@ public abstract class MixinWorldServer1_12 implements IMixinWorldServer1_12 {
     public FLevelServer1_12 fp2_levelServer() {
         checkState(this.fp2_levelServer != null, "not initialized or already closed!");
         return this.fp2_levelServer;
-    }
-
-    @Inject(method = "tick",
-            at = @At("HEAD"))
-    private void fp2_tickRelight(CallbackInfo callbackInfo) {
-        ExactChunkRelightQueue1_12.tick(PorkUtil.<WorldServer>uncheckedCast(this));
     }
 }

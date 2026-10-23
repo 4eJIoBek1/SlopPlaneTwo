@@ -176,7 +176,7 @@ public final class FP2Config implements Cloneable<FP2Config> {
     private FP2Config() {
         this.maxLevels = 3;
         this.cutoffDistance = 256;
-        this.netherMaxLevels = 2;
+        this.netherMaxLevels = 3;
 
         this.performance = new Performance();
         this.compatibility = new Compatibility();
