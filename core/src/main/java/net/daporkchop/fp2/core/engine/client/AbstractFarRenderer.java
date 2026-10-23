@@ -398,21 +398,16 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
      * @param frustum the current view frustum
      */
     public void prepare(@NonNull CameraState cameraState, @NonNull IFrustum frustum) {
-        long profilerStart = System.nanoTime();
-        try {
-            this.bufferUploader.tick();
-            this.bakeManager.tick(this.bufferUploader, this.bakeStorage, this.renderIndex);
+        this.bufferUploader.tick();
+        this.bakeManager.tick(this.bufferUploader, this.bakeStorage, this.renderIndex);
 
-            //update camera state uniforms
-            try (val uniforms = this.cameraStateUniformsBuffer.update()) {
-                cameraState.configureUniforms(uniforms);
-            }
+        //update camera state uniforms
+        try (val uniforms = this.cameraStateUniformsBuffer.update()) {
+            cameraState.configureUniforms(uniforms);
+        }
 
-            try (val ignored = this.statePreserverSelect.backup()) { //back up opengl state prior to selecting
-                this.renderIndex.select(frustum, this.levelRenderer.blockedTracker());
-            }
-        } finally {
-            RenderProfiler.prepare(System.nanoTime() - profilerStart);
+        try (val ignored = this.statePreserverSelect.backup()) { //back up opengl state prior to selecting
+            this.renderIndex.select(frustum, this.levelRenderer.blockedTracker());
         }
     }
 
@@ -455,15 +450,6 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
     }
 
     public void render(@NonNull CameraState cameraState, @NonNull DrawState drawState) {
-        long profilerStart = System.nanoTime();
-        try {
-            this.render0(cameraState, drawState);
-        } finally {
-            RenderProfiler.render(System.nanoTime() - profilerStart);
-        }
-    }
-
-    private void render0(@NonNull CameraState cameraState, @NonNull DrawState drawState) {
         this.shaderPackWaterCameraState = null; //reset the pending translucent pass draw, it will be re-initialized below if needed
         this.shaderPackXfbShaderProgram = null;
 

@@ -30,7 +30,6 @@ import net.daporkchop.fp2.core.client.render.state.CameraState;
 import net.daporkchop.fp2.core.client.render.state.CameraStateUniforms;
 import net.daporkchop.fp2.core.engine.DirectTilePosAccess;
 import net.daporkchop.fp2.core.engine.TilePos;
-import net.daporkchop.fp2.core.engine.client.RenderProfiler;
 import net.daporkchop.fp2.core.engine.client.RenderConstants;
 import net.daporkchop.fp2.core.engine.client.bake.storage.BakeStorage;
 import net.daporkchop.fp2.core.engine.client.index.AbstractRenderIndex;
@@ -51,8 +50,6 @@ import net.daporkchop.fp2.gl.shader.ShaderProgram;
 import net.daporkchop.fp2.gl.state.StatePreserver;
 import net.daporkchop.lib.common.util.PArrays;
 
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.util.Map;
 import java.util.stream.Stream;
 
@@ -132,10 +129,6 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
      * Scratch arrays holding the tile positions and draw commands which are drawn by {@link #drawShaderPackTiles}, in the order in which they're drawn.
      */
     protected TilePos[] shaderPackTilePositions = new TilePos[0];
-    /**
-     * Whether the contents of the capture buffer have already been dumped to the profiler output.
-     */
-    protected boolean shaderPackDumped;
     protected BakeStorage.Location[] shaderPackTileCommands = new BakeStorage.Location[0];
 
     public CPUCulledUniformRenderIndex(OpenGL gl, BakeStorage<VertexType> bakeStorage, DirectMemoryAllocator alloc) {
@@ -328,20 +321,17 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
         TilePos[] tilePositions = this.shaderPackTilePositions;
         BakeStorage.Location[] tileCommands = this.shaderPackTileCommands;
         int tileCount = 0;
-        long profilerIndices = 0L;
         for (val entry : selectedLocations.entrySet()) {
             val command = entry.getValue()[pass];
             if (command != null) {
                 tilePositions[tileCount] = entry.getKey();
                 tileCommands[tileCount] = command;
-                profilerIndices += command.count;
                 tileCount++;
             }
         }
         if (tileCount == 0) {
             return;
         }
-        RenderProfiler.tiles(level, tileCount, profilerIndices);
 
         try {
             if (packProgram == 0) { //no shader program is bound, so there is nothing which the captured geometry could be drawn with
@@ -392,7 +382,6 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
                     gl.glEndTransformFeedback();
                     gl.glDisable(GL_RASTERIZER_DISCARD);
                 }
-                this.shaderPackDumpCapture((int) batchVertices, packProgram);
 
                 //draw the captured geometry using the shader pack's program. the captured vertices are already relative to the camera, so the model-view
                 //  matrix must be left untouched (just like vanilla chunk rendering, which performs the camera-relative translation on the CPU).
@@ -487,58 +476,6 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
     private void shaderPackCaptureAttribute(int index, int size, int type, boolean normalized, int offset) {
         this.gl.glEnableVertexAttribArray(index);
         this.gl.glVertexAttribPointer(index, size, type, normalized, RenderConstants.SHADER_PACK_XFB_STRIDE, offset);
-    }
-
-    /**
-     * Temporary diagnostics: reads the first few vertices of the capture buffer back and writes them to the profiler output, so that a capture which doesn't
-     * end up being drawn can be inspected.
-     *
-     * @param vertices    the number of vertices which were captured
-     * @param packProgram the shader pack program which the geometry is going to be drawn with
-     */
-    protected void shaderPackDumpCapture(int vertices, int packProgram) {
-        if (this.shaderPackDumped) {
-            return;
-        }
-        this.shaderPackDumped = true;
-
-        int count = Math.min(vertices, 12);
-        if (count <= 0) {
-            return;
-        }
-
-        int stride = RenderConstants.SHADER_PACK_XFB_STRIDE;
-        ByteBuffer buffer = ByteBuffer.allocateDirect(count * stride).order(ByteOrder.LITTLE_ENDIAN);
-        OpenGL gl = this.gl;
-        int oldBuffer = gl.glGetInteger(GL_ARRAY_BUFFER_BINDING);
-        try {
-            gl.glBindBuffer(GL_ARRAY_BUFFER, this.shaderPackCaptureBuffer);
-            gl.glGetBufferSubData(GL_ARRAY_BUFFER, 0L, buffer);
-        } catch (Throwable t) {
-            RenderProfiler.note("capture dump failed: " + t);
-            return;
-        } finally {
-            gl.glBindBuffer(GL_ARRAY_BUFFER, oldBuffer);
-        }
-
-        RenderProfiler.note(String.format("capture dump: packProgram=%d vertices=%d", packProgram, vertices));
-        for (int i = 0; i < count; i++) {
-            int off = i * stride;
-            int pos = off + RenderConstants.SHADER_PACK_XFB_POS_OFFSET;
-            int color = off + RenderConstants.SHADER_PACK_XFB_COLOR_OFFSET;
-            int normal = off + RenderConstants.SHADER_PACK_XFB_NORMAL_OFFSET;
-            int uv = off + RenderConstants.SHADER_PACK_XFB_UV_OFFSET;
-            int light = off + RenderConstants.SHADER_PACK_XFB_LIGHT_OFFSET;
-            int entity = off + RenderConstants.SHADER_PACK_XFB_ENTITY_OFFSET;
-            RenderProfiler.note(String.format("  v%d pos=(%.2f, %.2f, %.2f) rgba=(%d,%d,%d,%d) n=(%d,%d,%d) uv=(%.3f, %.3f) light=(%d,%d) entity=(%d,%d,%d,%d)",
-                    i,
-                    buffer.getFloat(pos), buffer.getFloat(pos + 4), buffer.getFloat(pos + 8),
-                    buffer.get(color) & 0xFF, buffer.get(color + 1) & 0xFF, buffer.get(color + 2) & 0xFF, buffer.get(color + 3) & 0xFF,
-                    buffer.get(normal), buffer.get(normal + 1), buffer.get(normal + 2),
-                    buffer.getFloat(uv), buffer.getFloat(uv + 4),
-                    buffer.getShort(light) & 0xFFFF, buffer.getShort(light + 2) & 0xFFFF,
-                    buffer.get(entity) & 0xFF, buffer.get(entity + 1) & 0xFF, buffer.get(entity + 2) & 0xFF, buffer.get(entity + 3) & 0xFF));
-        }
     }
 
     @Override
