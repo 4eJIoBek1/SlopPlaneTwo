@@ -50,6 +50,13 @@ public final class ShaderPackCompat {
         }
 
         /**
+         * Gets the block alias ID for water (block ID 9) to pass in mc_Entity.x.
+         */
+        default int waterBlockAliasId() {
+            return 9;
+        }
+
+        /**
          * Checks whether the pack's water shader program is available.
          * <p>
          * If it isn't, the translucent parts of the far terrain are drawn using the pack's regular terrain program instead (as opaque geometry), as drawing

@@ -109,6 +109,7 @@ public class OFHelper1_12 {
     private static final Field OF_SHADERS_PROGRAMWATER_FIELD = !OF ? null : field("net.optifine.shaders.Shaders", "ProgramWater");
     private static final Field OF_SHADERS_PROGRAMTERRAIN_FIELD = !OF ? null : field("net.optifine.shaders.Shaders", "ProgramTerrain");
     private static final Method OF_PROGRAM_GETID = !OF ? null : method("net.optifine.shaders.Program", "getId");
+    private static final MethodHandle OF_BLOCKALIASES_GETBLOCKALIASID = !OF ? null : staticHandle("net.optifine.shaders.BlockAliases", int.class, "getBlockAliasId", int.class, int.class);
 
     public static final String OF_DEFINE_SHADERS = "OPTIFINE_SHADERS";
 
@@ -155,6 +156,14 @@ public class OFHelper1_12 {
     @SneakyThrows(Throwable.class)
     public static void of_Shaders_endWater() {
         OF_SHADERS_ENDWATER.invokeExact();
+    }
+
+    @SneakyThrows(Throwable.class)
+    public static int of_BlockAliases_getBlockAliasId(int blockId, int metadata) {
+        if (!OF || OF_BLOCKALIASES_GETBLOCKALIASID == null) {
+            return blockId;
+        }
+        return (int) OF_BLOCKALIASES_GETBLOCKALIASID.invokeExact(blockId, metadata);
     }
 
     /**

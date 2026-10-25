@@ -123,10 +123,8 @@ void main() {
     //pack the values which are constant for the whole triangle
     uint packedColor = packUnorm8(vertexColor.r) | (packUnorm8(vertexColor.g) << 8) | (packUnorm8(vertexColor.b) << 16) | (255u << 24);
     uint packedNormal = packSnorm8(normal.x) | (packSnorm8(normal.y) << 8) | (packSnorm8(normal.z) << 16);
-    uint packedEntity = (uint(round(clamp(u_mcEntity.x, 0.0, 255.0))) & 0xFFu)
-            | ((uint(round(clamp(u_mcEntity.y, 0.0, 255.0))) & 0xFFu) << 8)
-            | ((uint(round(clamp(u_mcEntity.z, 0.0, 255.0))) & 0xFFu) << 16)
-            | ((uint(round(clamp(u_mcEntity.w, 0.0, 255.0))) & 0xFFu) << 24);
+    uint packedEntity = (uint(int(round(u_mcEntity.x))) & 0xFFFFu)
+            | ((uint(int(round(u_mcEntity.y))) & 0xFFFFu) << 16);
 
     for (int i = 0; i < 3; i++) {
         //fp2 stores the lightmap coordinates normalized, but vanilla (and shader packs) use the 0-255 range

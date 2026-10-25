@@ -304,7 +304,7 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
         //  back to a block state on the GPU, so a constant value is used for all vertices of a pass instead. the translucent pass only ever contains water,
         //  which is identified by its block id (8/9, as used by Chocapic13) as well as by a metadata value of 1 (as used by SEUS).
         boolean water = pass == RenderConstants.LAYER_TRANSPARENT;
-        float mcEntityX = water ? 9.0f : 0.0f;
+        float mcEntityX = water ? (float) shaderPack.waterBlockAliasId() : 0.0f;
         float mcEntityY = water ? 1.0f : 0.0f;
 
         //save the state which we're going to modify. the shader pack's program is bound by the caller, and needs to be restored after every capture.
@@ -460,7 +460,7 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
 
             int entityAttribute = shaderPack.entityAttribute();
             if (entityAttribute >= 0) {
-                this.shaderPackCaptureAttribute(entityAttribute, 4, GL_UNSIGNED_BYTE, false, RenderConstants.SHADER_PACK_XFB_ENTITY_OFFSET); //mc_Entity
+                this.shaderPackCaptureAttribute(entityAttribute, 2, GL_SHORT, false, RenderConstants.SHADER_PACK_XFB_ENTITY_OFFSET); //mc_Entity
             }
         } catch (Throwable t) {
             gl.glDeleteVertexArray(vao);

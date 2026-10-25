@@ -58,6 +58,11 @@ public final class OFShaderPackRenderer1_12 implements ShaderPackCompat.Renderer
     }
 
     @Override
+    public int waterBlockAliasId() {
+        return of_BlockAliases_getBlockAliasId(9, 0);
+    }
+
+    @Override
     public boolean hasWaterProgram() {
         return of_Shaders_programWaterId() > 0;
     }
