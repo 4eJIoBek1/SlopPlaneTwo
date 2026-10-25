@@ -283,6 +283,10 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
      */
     protected DrawShaderProgram shaderPackXfbShaderProgram;
 
+    protected RenderIndex.DrawableMask deferredTranslucentDrawableMask;
+    protected RenderIndex.DrawArguments deferredTranslucentDrawArguments;
+    protected CapturedShaderPrograms deferredTranslucentShaderPrograms;
+
     protected final RenderIndex.PosTechnique tilePosTechnique;
     protected final GpuQuadLists.QuadsTechnique textureQuadsTechnique;
     protected final DrawMode drawMode;
@@ -452,6 +456,9 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
     public void render(@NonNull CameraState cameraState, @NonNull DrawState drawState) {
         this.shaderPackWaterCameraState = null; //reset the pending translucent pass draw, it will be re-initialized below if needed
         this.shaderPackXfbShaderProgram = null;
+        this.deferredTranslucentDrawableMask = null;
+        this.deferredTranslucentDrawArguments = null;
+        this.deferredTranslucentShaderPrograms = null;
 
         RenderIndex.DrawableMask drawableMask = this.renderIndex.drawableMask();
 
@@ -526,10 +533,35 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
                         }
                     }
                 } else {
-                    this.renderTransparentStencilPass(drawableMask, drawArguments, capturedShaderPrograms);
-                    this.renderTransparentFragmentPass(drawableMask, drawArguments, capturedShaderPrograms);
+                    this.deferredTranslucentDrawableMask = drawableMask;
+                    this.deferredTranslucentDrawArguments = drawArguments;
+                    this.deferredTranslucentShaderPrograms = capturedShaderPrograms;
                 }
             }
+
+            this.postRender(drawArguments);
+        }
+    }
+
+    /**
+     * Draws the deferred translucent pass of the far terrain after vanilla translucent terrain has been rendered.
+     */
+    public void renderTranslucentPass() {
+        val drawableMask = this.deferredTranslucentDrawableMask;
+        val drawArguments = this.deferredTranslucentDrawArguments;
+        val capturedShaderPrograms = this.deferredTranslucentShaderPrograms;
+        if (drawableMask == null || drawArguments == null || capturedShaderPrograms == null) {
+            return;
+        }
+        this.deferredTranslucentDrawableMask = null;
+        this.deferredTranslucentDrawArguments = null;
+        this.deferredTranslucentShaderPrograms = null;
+
+        try (val ignored = this.statePreserverDraw.backup()) {
+            this.preRender(drawArguments);
+
+            this.renderTransparentStencilPass(drawableMask, drawArguments, capturedShaderPrograms);
+            this.renderTransparentFragmentPass(drawableMask, drawArguments, capturedShaderPrograms);
 
             this.postRender(drawArguments);
         }

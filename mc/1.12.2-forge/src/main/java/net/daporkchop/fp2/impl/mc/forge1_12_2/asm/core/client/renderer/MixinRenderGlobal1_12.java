@@ -20,14 +20,18 @@
 package net.daporkchop.fp2.impl.mc.forge1_12_2.asm.core.client.renderer;
 
 import net.daporkchop.fp2.core.client.IFrustum;
+import net.daporkchop.fp2.core.client.render.ShaderPackCompat;
 import net.daporkchop.fp2.core.engine.client.AbstractFarRenderer;
 import net.daporkchop.fp2.core.engine.api.ctx.IFarClientContext;
+import net.daporkchop.fp2.impl.mc.forge1_12_2.asm.at.client.ATMinecraft1_12;
 import net.daporkchop.fp2.impl.mc.forge1_12_2.asm.interfaz.client.network.IMixinEntityRenderer1_12;
 import net.daporkchop.fp2.impl.mc.forge1_12_2.asm.interfaz.client.renderer.IMixinRenderGlobal1_12;
 import net.daporkchop.fp2.impl.mc.forge1_12_2.client.TerrainRenderingBlockedTracker1_12;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
+import net.minecraft.client.renderer.GlStateManager;
 import net.minecraft.client.renderer.RenderGlobal;
+import net.minecraft.client.renderer.texture.TextureMap;
 import net.minecraft.client.renderer.culling.ICamera;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.BlockRenderLayer;
@@ -145,6 +149,32 @@ abstract class MixinRenderGlobal1_12 implements IMixinRenderGlobal1_12 {
                 renderer.renderShaderPackWater();
             }
         });
+
+        if (!ShaderPackCompat.isActive()) {
+            GlStateManager.depthMask(true);
+        }
+    }
+
+    @Inject(method = "Lnet/minecraft/client/renderer/RenderGlobal;renderBlockLayer(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
+            at = @At(value = "RETURN"),
+            require = 1, allow = 2)
+    private void fp2_renderBlockLayer_afterTranslucent(BlockRenderLayer layer, double partialTicks, int pass, Entity entityIn, CallbackInfoReturnable<Integer> cir) {
+        if (layer != BlockRenderLayer.TRANSLUCENT || of_Shaders_isShadowPass()) {
+            return;
+        }
+
+        fp2().client().currentPlayer().ifPresent(player -> {
+            IFarClientContext context = player.activeContext();
+            AbstractFarRenderer renderer;
+            if (context != null && (renderer = context.renderer()) != null) {
+                this.mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+                ((ATMinecraft1_12) this.mc).getTextureMapBlocks().setBlurMipmapDirect(false, this.mc.gameSettings.mipmapLevels > 0);
+                renderer.renderTranslucentPass();
+                ((ATMinecraft1_12) this.mc).getTextureMapBlocks().restoreLastBlurMipmap();
+            }
+        });
+
+        GlStateManager.depthMask(false);
     }
 
     @Override
