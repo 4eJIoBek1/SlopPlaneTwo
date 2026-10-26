@@ -123,8 +123,14 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
             //step 1: write vertices for all source tiles, and assign indices
             this.writeVertices(srcs, pos.minBlockX(), pos.minBlockY(), pos.minBlockZ(), pos.level(), map, output.verts);
 
-            //step 2: write indices to actually connect the vertices and build the mesh
+            //step 2: clamp boundary vertices so surface quads at border connect properly
+            this.clampBoundaryVertices(srcs[0], pos.minBlockX(), pos.minBlockY(), pos.minBlockZ(), pos.level(), map, output.verts);
+
+            //step 3: write indices to actually connect the vertices and build the mesh
             this.writeIndices(srcs[0], map, output.indicesPerPass);
+
+            //step 4: write vertical skirts for boundary edges exposed to air/void
+            this.writeSkirts(srcs, map, output.indicesPerPass, output.verts);
         } finally {
             alloc.release(map);
         }
@@ -260,5 +266,165 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
         } else {
             indices.appendQuad(oppositeCorner, c0, c1, provoking);
         }
+    }
+
+    protected void clampBoundaryVertices(Tile src, int blockX, int blockY, int blockZ, int level, int[] map, AttributeWriter<VoxelLocalAttributes> verts) {
+        final TileData data = new TileData();
+        for (int j = 0; j < src.count(); j++) {
+            int voxelPos = src.get(j, data);
+            int dx = (voxelPos >> (T_SHIFT << 1)) & T_MASK;
+            int dy = (voxelPos >> T_SHIFT) & T_MASK;
+            int dz = voxelPos & T_MASK;
+
+            int edges = data.edges;
+            if ((((edges >> 2) ^ (edges >> 3)) & 1) != 0) {
+                edges ^= EDGE_DIR_MASK << 2;
+            }
+            if ((edges & (EDGE_DIR_MASK << 2)) == EDGE_DIR_NONE) {
+                continue;
+            }
+
+            int state = data.states[1];
+            if (this.levelRenderer.renderTypeForState(state) != 0) {
+                continue; // Only solid opaque blocks get boundary clamping, never water or foliage
+            }
+
+            if (dx == 15) {
+                this.ensureBoundaryVertex(blockX, blockY, blockZ, level, 16, dy, dz, data, verts, map);
+                this.ensureBoundaryVertex(blockX, blockY, blockZ, level, 16, dy, dz + 1, data, verts, map);
+            }
+            if (dz == 15) {
+                this.ensureBoundaryVertex(blockX, blockY, blockZ, level, dx, dy, 16, data, verts, map);
+                this.ensureBoundaryVertex(blockX, blockY, blockZ, level, dx + 1, dy, 16, data, verts, map);
+            }
+            if (dx == 15 && dz == 15) {
+                this.ensureBoundaryVertex(blockX, blockY, blockZ, level, 16, dy, 16, data, verts, map);
+            }
+        }
+    }
+
+    protected void ensureBoundaryVertex(int blockX, int blockY, int blockZ, int level, int x, int y, int z, TileData data, AttributeWriter<VoxelLocalAttributes> vertices, int[] map) {
+        int baseMapIndex = ((x * T_VERTS + y) * T_VERTS + z) * 3;
+        if (map[baseMapIndex + 1] >= 0) {
+            return;
+        }
+
+        final int fractMask = this.forceBlockyMesh ? 0 : -1;
+        int blockLight = BlockLevelConstants.unpackBlockLight(data.light);
+        int skyLight = BlockLevelConstants.unpackSkyLight(data.light);
+
+        int posX = (x << POS_FRACT_SHIFT) + (x == 16 ? 0 : (data.x & fractMask));
+        int posY = (y << POS_FRACT_SHIFT) + (data.y & fractMask);
+        int posZ = (z << POS_FRACT_SHIFT) + (z == 16 ? 0 : (data.z & fractMask));
+
+        int state = data.states[1];
+        int color = this.levelRenderer.tintFactorForStateInBiomeAtPos(state, data.biome, blockX + (x << level), blockY + (y << level), blockZ + (z << level));
+
+        vertices.append()
+                .light((blockLight << 4) | 8, (skyLight << 4) | 8)
+                .pos(posX, posY, posZ)
+                .state(this.textureUVs.state2index(state))
+                .color(color)
+                .close();
+
+        int vertIdx = vertices.size() - 1;
+        for (int edge = 0; edge < EDGE_COUNT; edge++) {
+            if (map[baseMapIndex + edge] < 0) {
+                map[baseMapIndex + edge] = vertIdx;
+            }
+        }
+    }
+
+    protected void writeSkirts(Tile[] srcs, int[] map, IndexWriter[] indices, AttributeWriter<VoxelLocalAttributes> verts) {
+        Tile src0 = srcs[0];
+        if (src0 == null) {
+            return;
+        }
+
+        final TileData data = new TileData();
+        final TileData scratchData = new TileData();
+        final int fractMask = this.forceBlockyMesh ? 0 : -1;
+
+        for (int j = 0; j < src0.count(); j++) {
+            int voxelPos = src0.get(j, data);
+            int dx = (voxelPos >> (T_SHIFT << 1)) & T_MASK;
+            int dy = (voxelPos >> T_SHIFT) & T_MASK;
+            int dz = voxelPos & T_MASK;
+
+            int edges = data.edges;
+            if ((((edges >> 2) ^ (edges >> 3)) & 1) != 0) {
+                edges ^= EDGE_DIR_MASK << 2;
+            }
+            if ((edges & (EDGE_DIR_MASK << 2)) == EDGE_DIR_NONE) {
+                continue;
+            }
+
+            int state = data.states[1];
+            if (this.levelRenderer.renderTypeForState(state) != 0) {
+                continue; // Only solid opaque blocks get boundary clamping, never water or foliage
+            }
+
+            int topY = (dy << POS_FRACT_SHIFT) + (data.y & fractMask);
+            if (topY <= 0) {
+                continue;
+            }
+
+            IndexWriter buf = indices[this.levelRenderer.renderTypeForState(state)];
+
+            // +X boundary skirt
+            if (dx == 15) {
+                boolean exposed = (srcs[4] == null || !srcs[4].get(0, dy, dz, scratchData));
+                if (exposed) {
+                    int v_top_0 = map[vertexMapIndex(15, dy, dz, 6, 1)]; // (16, dy, dz)
+                    int v_top_1 = map[vertexMapIndex(15, dy, dz, 7, 1)]; // (16, dy, dz + 1)
+                    if (v_top_0 >= 0 && v_top_1 >= 0) {
+                        int v_bot_0 = this.appendBottomVertex(verts, 16 << POS_FRACT_SHIFT, 0, (dz << POS_FRACT_SHIFT) + (data.z & fractMask), v_top_0);
+                        int v_bot_1 = this.appendBottomVertex(verts, 16 << POS_FRACT_SHIFT, 0, ((dz + 1) << POS_FRACT_SHIFT) + (data.z & fractMask), v_top_1);
+                        this.appendQuad(buf, v_bot_1, v_bot_0, v_top_1, v_top_0);
+                    }
+                }
+            }
+
+            // -X boundary skirt
+            if (dx == 0) {
+                int v_top_0 = map[vertexMapIndex(0, dy, dz, 4, 1)]; // (0, dy, dz)
+                int v_top_1 = map[vertexMapIndex(0, dy, dz, 5, 1)]; // (0, dy, dz + 1)
+                if (v_top_0 >= 0 && v_top_1 >= 0) {
+                    int v_bot_0 = this.appendBottomVertex(verts, (dx << POS_FRACT_SHIFT) + (data.x & fractMask), 0, (dz << POS_FRACT_SHIFT) + (data.z & fractMask), v_top_0);
+                    int v_bot_1 = this.appendBottomVertex(verts, (dx << POS_FRACT_SHIFT) + (data.x & fractMask), 0, ((dz + 1) << POS_FRACT_SHIFT) + (data.z & fractMask), v_top_1);
+                    this.appendQuad(buf, v_bot_1, v_top_1, v_bot_0, v_top_0);
+                }
+            }
+
+            // +Z boundary skirt
+            if (dz == 15) {
+                boolean exposed = (srcs[1] == null || !srcs[1].get(dx, dy, 0, scratchData));
+                if (exposed) {
+                    int v_top_0 = map[vertexMapIndex(dx, dy, 15, 5, 1)]; // (dx, dy, 16)
+                    int v_top_1 = map[vertexMapIndex(dx, dy, 15, 7, 1)]; // (dx + 1, dy, 16)
+                    if (v_top_0 >= 0 && v_top_1 >= 0) {
+                        int v_bot_0 = this.appendBottomVertex(verts, (dx << POS_FRACT_SHIFT) + (data.x & fractMask), 0, 16 << POS_FRACT_SHIFT, v_top_0);
+                        int v_bot_1 = this.appendBottomVertex(verts, ((dx + 1) << POS_FRACT_SHIFT) + (data.x & fractMask), 0, 16 << POS_FRACT_SHIFT, v_top_1);
+                        this.appendQuad(buf, v_bot_1, v_top_1, v_bot_0, v_top_0);
+                    }
+                }
+            }
+
+            // -Z boundary skirt
+            if (dz == 0) {
+                int v_top_0 = map[vertexMapIndex(dx, dy, 0, 4, 1)]; // (dx, dy, 0)
+                int v_top_1 = map[vertexMapIndex(dx, dy, 0, 6, 1)]; // (dx + 1, dy, 0)
+                if (v_top_0 >= 0 && v_top_1 >= 0) {
+                    int v_bot_0 = this.appendBottomVertex(verts, (dx << POS_FRACT_SHIFT) + (data.x & fractMask), 0, (dz << POS_FRACT_SHIFT) + (data.z & fractMask), v_top_0);
+                    int v_bot_1 = this.appendBottomVertex(verts, ((dx + 1) << POS_FRACT_SHIFT) + (data.x & fractMask), 0, (dz << POS_FRACT_SHIFT) + (data.z & fractMask), v_top_1);
+                    this.appendQuad(buf, v_bot_1, v_bot_0, v_top_1, v_top_0);
+                }
+            }
+        }
+    }
+
+    private int appendBottomVertex(AttributeWriter<VoxelLocalAttributes> verts, int x, int y, int z, int srcVertIdx) {
+        verts.appendCopy(srcVertIdx).pos(x, y, z).close();
+        return verts.size() - 1;
     }
 }
