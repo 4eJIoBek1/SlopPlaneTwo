@@ -127,21 +127,32 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
         int factorChunkY = maxChunkY - minChunkY;
         int factorChunkZ = maxChunkZ - minChunkZ;
 
+        int playerChunkX = renderPosX >> 4;
+        int playerChunkZ = renderPosZ >> 4;
+        int renderDist = net.minecraft.client.Minecraft.getMinecraft().gameSettings.renderDistanceChunks;
+        int maxSafeDistSq = Math.max(0, renderDist - 1) * Math.max(0, renderDist - 1);
+
         long[] srcFlags = new long[factorChunkX * factorChunkY * factorChunkZ];
         //iterate over all the ContainerLocalRenderInformation instances, because they indicate:
         // - which direction to enter a RenderChunk from
         // - whether or not a RenderChunk is actually selected to be rendered
         ((ATRenderGlobal1_12) renderGlobal).getRenderInfos().forEach(containerLocalRenderInformation -> {
+            BlockPos pos = containerLocalRenderInformation.getRenderChunk().getPosition();
+            int chunkX = pos.getX() >> 4;
+            int chunkY = pos.getY() >> 4;
+            int chunkZ = pos.getZ() >> 4;
+
+            int dx = chunkX - playerChunkX;
+            int dz = chunkZ - playerChunkZ;
+            if (dx * dx + dz * dz > maxSafeDistSq) {
+                return; // outer edge of render distance: conservative, don't mark as blocked to prevent gaps
+            }
+
             long flags = 0L;
             flags |= renderDirectionFlags(containerLocalRenderInformation);
             flags |= inFaceFlags(containerLocalRenderInformation);
 
             flags |= FLAG_SELECTED;
-
-            BlockPos pos = containerLocalRenderInformation.getRenderChunk().getPosition();
-            int chunkX = pos.getX() >> 4;
-            int chunkY = pos.getY() >> 4;
-            int chunkZ = pos.getZ() >> 4;
             assert chunkX >= minChunkX && chunkX < maxChunkX && chunkY >= minChunkY && chunkY < maxChunkY && chunkZ >= minChunkZ && chunkZ < maxChunkZ
                     : "RenderChunk(" + chunkX + ',' + chunkY + ',' + chunkZ + ") is outside of render distance: from (" + minChunkX + ',' + minChunkY + ',' + minChunkZ + ") to (" + maxChunkX + ',' + maxChunkY + ',' + maxChunkZ + ')';
             int index = ((chunkX + offsetChunkX) * factorChunkY + (chunkY + offsetChunkY)) * factorChunkZ + (chunkZ + offsetChunkZ);

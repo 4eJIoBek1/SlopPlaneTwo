@@ -32,6 +32,12 @@ vec4 computeBlockColor(vec3 normal) {
     if (frag_color.a <= u_alphaRefCutout) {
         discard;
     }
+#else
+    //for solid pass (including leaves in LOD), fill transparent holes with darkened foliage color instead of sky void
+    if (frag_color.a < 0.5) {
+        frag_color.rgb = max(fs_in_color * 0.35, vec3(0.15));
+        frag_color.a = 1.0;
+    }
 #endif
 
     //block/sky light

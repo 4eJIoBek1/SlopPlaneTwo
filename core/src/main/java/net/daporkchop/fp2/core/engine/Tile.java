@@ -126,7 +126,7 @@ public class Tile implements IReusablePersistent {
                     //write position
                     out.writeShortLE(i);
 
-                    long data = tile.addr + INDEX_SIZE + index * ENTRY_DATA_SIZE_BYTES;
+                    long data = tile.addr + INDEX_SIZE + index * ENTRY_FULL_SIZE_BYTES + 2L;
                     for (int j = 0; j < ENTRY_DATA_SIZE; j++) { //write voxel data
                         out.writeIntLE(PUnsafe.getUnalignedInt(data + j * 4L));
                     }
@@ -235,13 +235,16 @@ public class Tile implements IReusablePersistent {
     }
 
     public Tile set(int x, int y, int z, TileData data) {
-        long indexAddr = this.addr + Tile.index(x, y, z) * 2L;
+        int pos = Tile.index(x, y, z);
+        long indexAddr = this.addr + pos * 2L;
         int index = PUnsafe.getShort(indexAddr);
         if (index < 0) { //index is unset, allocate new one
             PUnsafe.putShort(indexAddr, (short) (index = this.count++));
         }
 
-        Tile.writeData(this.addr + Tile.INDEX_SIZE + index * Tile.ENTRY_DATA_SIZE_BYTES, data);
+        long base = this.addr + Tile.INDEX_SIZE + index * Tile.ENTRY_FULL_SIZE_BYTES;
+        PUnsafe.putChar(base, (char) pos);
+        Tile.writeData(base + 2L, data);
         return this;
     }
 
@@ -296,7 +299,7 @@ public class Tile implements IReusablePersistent {
             int index = PUnsafe.getShort(this.addr + i * 2L);
             if (index >= 0) { //voxel is set
                 dst.writeShortLE(i); //write position
-                long base = this.addr + INDEX_SIZE + index * ENTRY_DATA_SIZE_BYTES;
+                long base = this.addr + INDEX_SIZE + index * ENTRY_FULL_SIZE_BYTES + 2L;
                 for (int j = 0; j < ENTRY_DATA_SIZE; j++) { //write voxel data
                     dst.writeIntLE(PUnsafe.getInt(base + j * 4L));
                 }

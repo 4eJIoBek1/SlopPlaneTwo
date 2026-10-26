@@ -37,7 +37,7 @@ import net.daporkchop.fp2.core.engine.api.server.gen.IFarGeneratorExact;
 import net.daporkchop.fp2.core.engine.api.server.gen.IFarGeneratorRough;
 import net.daporkchop.fp2.core.engine.api.server.gen.IFarScaler;
 import net.daporkchop.fp2.core.engine.api.server.storage.FTileStorage;
-import net.daporkchop.fp2.core.engine.server.scale.VoxelScalerIntersection;
+import net.daporkchop.fp2.core.engine.server.scale.VoxelScalerClustering;
 import net.daporkchop.fp2.core.engine.server.tracking.TrackerManager;
 import net.daporkchop.fp2.core.engine.tile.ITileHandle;
 import net.daporkchop.fp2.core.engine.server.storage.DefaultTileStorage;
@@ -102,7 +102,7 @@ public abstract class TileProvider implements IFarTileProvider {
         }
 
         //TODO: maybe i should use an event for this?
-        this.scaler = new VoxelScalerIntersection(world, this);
+        this.scaler = new VoxelScalerClustering(world, this);
 
         try {
             //open the tile storage

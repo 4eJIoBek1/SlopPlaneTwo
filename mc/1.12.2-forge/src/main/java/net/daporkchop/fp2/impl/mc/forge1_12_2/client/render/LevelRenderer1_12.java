@@ -32,6 +32,8 @@ import net.daporkchop.fp2.impl.mc.forge1_12_2.util.Util1_12;
 import net.daporkchop.fp2.impl.mc.forge1_12_2.world.registry.GameRegistry1_12;
 import net.daporkchop.lib.common.misc.threadlocal.TL;
 import net.daporkchop.lib.common.pool.recycler.Recycler;
+import net.minecraft.block.Block;
+import net.minecraft.block.BlockLeaves;
 import net.minecraft.client.Minecraft;
 import net.minecraft.util.math.BlockPos;
 
@@ -64,20 +66,26 @@ public class LevelRenderer1_12 implements LevelRenderer, AutoCloseable {
         this.registry.states().forEach(state -> {
             //TODO: i need to do something about this: grass is rendered as CUTOUT_MIPPED, which makes it always render both faces
 
+            Block block = this.registry.id2state(state).getBlock();
             int typeIndex;
-            switch (this.registry.id2state(state).getBlock().getRenderLayer()) {
-                case SOLID:
-                    typeIndex = 0;
-                    break;
-                case CUTOUT:
-                case CUTOUT_MIPPED:
-                    typeIndex = 1;
-                    break;
-                case TRANSLUCENT:
-                    typeIndex = 2;
-                    break;
-                default:
-                    throw new IllegalArgumentException(this.registry.id2state(state).getBlock().getRenderLayer().name());
+            if (block instanceof BlockLeaves) {
+                // Far LOD leaves should be solid to avoid transparent holes into empty space
+                typeIndex = 0;
+            } else {
+                switch (block.getRenderLayer()) {
+                    case SOLID:
+                        typeIndex = 0;
+                        break;
+                    case CUTOUT:
+                    case CUTOUT_MIPPED:
+                        typeIndex = 1;
+                        break;
+                    case TRANSLUCENT:
+                        typeIndex = 2;
+                        break;
+                    default:
+                        throw new IllegalArgumentException(block.getRenderLayer().name());
+                }
             }
             this.renderTypeLookup[state] = (byte) typeIndex;
         });

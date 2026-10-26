@@ -35,6 +35,7 @@ import net.minecraft.client.renderer.texture.TextureMap;
 import net.minecraft.client.renderer.culling.ICamera;
 import net.minecraft.entity.Entity;
 import net.minecraft.util.BlockRenderLayer;
+import org.lwjgl.opengl.GL11;
 import org.objectweb.asm.Opcodes;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
@@ -152,6 +153,10 @@ abstract class MixinRenderGlobal1_12 implements IMixinRenderGlobal1_12 {
 
         if (!ShaderPackCompat.isActive()) {
             GlStateManager.depthMask(true);
+            GL11.glEnable(GL11.GL_STENCIL_TEST);
+            GL11.glStencilMask(0xFF);
+            GL11.glStencilOp(GL11.GL_KEEP, GL11.GL_KEEP, GL11.GL_REPLACE);
+            GL11.glStencilFunc(GL11.GL_ALWAYS, 0xFF, 0xFF);
         }
     }
 
@@ -174,6 +179,7 @@ abstract class MixinRenderGlobal1_12 implements IMixinRenderGlobal1_12 {
             }
         });
 
+        GL11.glDisable(GL11.GL_STENCIL_TEST);
         GlStateManager.depthMask(false);
     }
 

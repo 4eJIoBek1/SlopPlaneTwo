@@ -558,23 +558,10 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
         this.deferredTranslucentShaderPrograms = null;
 
         try (val ignored = this.statePreserverDraw.backup()) {
-            this.preRender(drawArguments);
-
-            CameraState waterCameraState = drawArguments.cameraState.clone();
-            double camY = waterCameraState.positionFloorY + (double) waterCameraState.positionFracY + (1.0d / 9.0d + 0.005d);
-            double floorY = Math.floor(camY);
-            waterCameraState.positionFloorY = (int) floorY;
-            waterCameraState.positionFracY = (float) (camY - floorY);
-            try (val uniforms = this.cameraStateUniformsBuffer.update()) {
-                waterCameraState.configureUniforms(uniforms);
-            }
+            this.preRenderTranslucent(drawArguments);
 
             this.renderTransparentStencilPass(drawableMask, drawArguments, capturedShaderPrograms);
             this.renderTransparentFragmentPass(drawableMask, drawArguments, capturedShaderPrograms);
-
-            try (val uniforms = this.cameraStateUniformsBuffer.update()) {
-                drawArguments.cameraState.configureUniforms(uniforms);
-            }
 
             this.postRender(drawArguments);
         }
@@ -604,15 +591,6 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
         }
 
         try (val ignored = this.statePreserverDraw.backup()) { //back up opengl state prior to rendering
-            CameraState waterCameraState = cameraState.clone();
-            double camY = waterCameraState.positionFloorY + (double) waterCameraState.positionFracY + (1.0d / 9.0d + 0.005d);
-            double floorY = Math.floor(camY);
-            waterCameraState.positionFloorY = (int) floorY;
-            waterCameraState.positionFracY = (float) (camY - floorY);
-            try (val uniforms = this.cameraStateUniformsBuffer.update()) {
-                waterCameraState.configureUniforms(uniforms);
-            }
-
             //the uniform buffers are restored to their previous values when the regular render pass ends, but the captured geometry still needs the camera
             //  state in order to compute camera-relative vertex positions. note that these binding points are the same ones used by preRender().
             this.gl.glBindBufferBase(GL_UNIFORM_BUFFER, RenderConstants.CAMERA_STATE_UNIFORMS_UBO_BINDING, this.cameraStateUniformsBuffer.buffer().id());
@@ -627,12 +605,29 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
             //bind the block texture UVs, which are used to look up the texture coordinates of the block face each vertex belongs to
             this.levelRenderer.textureUVs().gpuQuadLists().bind(this.gl);
 
-            this.renderIndex.drawShaderPackWater(waterCameraState, shaderPack, xfbShaderProgram);
-
-            try (val uniforms = this.cameraStateUniformsBuffer.update()) {
-                cameraState.configureUniforms(uniforms);
-            }
+            this.renderIndex.drawShaderPackWater(cameraState, shaderPack, xfbShaderProgram);
         }
+    }
+
+    private void preRenderTranslucent(RenderIndex.DrawArguments drawArguments) {
+        this.renderIndex.preDraw(drawArguments);
+
+        //bind uniform buffers
+        this.gl.glBindBufferBase(GL_UNIFORM_BUFFER, RenderConstants.CAMERA_STATE_UNIFORMS_UBO_BINDING, this.cameraStateUniformsBuffer.buffer().id());
+        this.gl.glBindBufferBase(GL_UNIFORM_BUFFER, RenderConstants.DRAW_STATE_UNIFORMS_UBO_BINDING, this.drawStateUniformsBuffer.buffer().id());
+
+        this.gl.glEnable(GL_DEPTH_TEST);
+        this.gl.glDepthFunc(drawArguments.reversedZ ? GL_GREATER : GL_LEQUAL);
+
+        //bind texture UVs
+        this.levelRenderer.textureUVs().gpuQuadLists().bind(this.gl);
+
+        if (!FP2_DEBUG || this.fp2.globalConfig().debug().backfaceCulling()) {
+            this.gl.glEnable(GL_CULL_FACE);
+        }
+
+        this.gl.glEnable(GL_STENCIL_TEST);
+        this.gl.glStencilMask(0xFF);
     }
 
     private void preRender(RenderIndex.DrawArguments drawArguments) {
@@ -708,6 +703,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
     private void renderTransparentStencilPass(RenderIndex.DrawableMask drawableMask, RenderIndex.DrawArguments drawArguments, CapturedShaderPrograms capturedShaderPrograms) {
         this.gl.glColorMask(false, false, false, false);
         this.gl.glDepthMask(false);
+        this.gl.glDepthFunc(drawArguments.reversedZ ? GL_GREATER : GL_LEQUAL);
 
         val shader = capturedShaderPrograms.blockStencilShaderProgram;
         val uniformSetter = shader.bindUnsafe();
@@ -727,6 +723,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
     private void renderTransparentFragmentPass(RenderIndex.DrawableMask drawableMask, RenderIndex.DrawArguments drawArguments, CapturedShaderPrograms capturedShaderPrograms) {
         this.gl.glEnable(GL_BLEND);
         this.gl.glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
+        this.gl.glDepthFunc(drawArguments.reversedZ ? GL_GREATER : GL_LEQUAL);
 
         //GlStateManager.alphaFunc(GL_GREATER, 0.1f);
 
