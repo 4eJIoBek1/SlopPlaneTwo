@@ -32,6 +32,7 @@ import net.daporkchop.fp2.core.engine.util.TilePosArrayList;
 import net.daporkchop.fp2.core.server.world.level.IFarLevelServer;
 import net.daporkchop.fp2.core.util.math.Vector3d;
 import net.daporkchop.fp2.core.util.math.qef.QefSolver;
+import net.daporkchop.fp2.api.world.registry.FExtendedStateRegistryData;
 import net.daporkchop.lib.math.vector.Vec3d;
 
 import java.util.ArrayList;
@@ -262,6 +263,7 @@ public class VoxelScalerIntersection extends AbstractVoxelGenerator implements I
 
                         Arrays.fill(data.states, 0);
                         int edges = data.edges = dstEdges[dstIndex(x, y, z)];
+                        FExtendedStateRegistryData stateRegistryData = this.extendedStateRegistryData();
                         for (int edge = 0; edge < 3; edge++) {
                             if (((edges >> (edge << 1)) & EDGE_DIR_MASK) != EDGE_DIR_NONE) {
                                 data.states[edge] = 1;
@@ -269,18 +271,47 @@ public class VoxelScalerIntersection extends AbstractVoxelGenerator implements I
                                 //search from the top down: when multiple surface layers collapse into a single coarse voxel (such as the
                                 //  bottom and top faces of a flat world, or the two sides of a thin floating island), this preserves the
                                 //  state and light of the top face, which is the one actually visible from above
+                                int state = 0;
+                                int stateBiomeAndLight = 0;
+                                int opaqueState = 0;
+                                int opaqueBiomeAndLight = 0;
                                 VOXEL_SEARCH:
                                 for (int dx = 0; dx < 2; dx++) {
                                     for (int dy = 1; dy >= 0; dy--) {
                                         for (int dz = 0; dz < 2; dz++) {
-                                            if ((data.states[edge] = srcStates[srcIndex((x << 1) + dx, (y << 1) + dy, (z << 1) + dz, edge)]) != 0) {
-                                                int si = srcIndex((x << 1) + dx, (y << 1) + dy, (z << 1) + dz);
-                                                data.biome = srcBiomesAndLights[si] >> 8;
-                                                data.light = (byte) srcBiomesAndLights[si];
+                                            int si = srcIndex((x << 1) + dx, (y << 1) + dy, (z << 1) + dz);
+                                            int srcState = srcStates[si * 3 + edge];
+                                            if (srcState == 0) {
+                                                continue;
+                                            }
+
+                                            if (state == 0) {
+                                                state = srcState;
+                                                stateBiomeAndLight = srcBiomesAndLights[si];
+                                            }
+                                            if (opaqueState == 0 && stateRegistryData.type(srcState) == BLOCK_TYPE_OPAQUE) {
+                                                opaqueState = srcState;
+                                                opaqueBiomeAndLight = srcBiomesAndLights[si];
                                                 break VOXEL_SEARCH;
                                             }
                                         }
                                     }
+                                }
+
+                                //a water surface is translucent, but the mesh has no geometry behind it: a single coarse voxel stores one
+                                //  state and generates a single surface, so if the water wins, the seabed below it is dropped from the
+                                //  mesh entirely and the sky is visible through the water as a bright patch (this is very obvious over
+                                //  shallow seas, where a voxel covers both the surface and the seabed at high detail levels). when a
+                                //  voxel ends up holding both water and a solid block, keep the solid one and drop the water layer.
+                                if (opaqueState != 0 && stateRegistryData.isWater(state)) {
+                                    state = opaqueState;
+                                    stateBiomeAndLight = opaqueBiomeAndLight;
+                                }
+
+                                if (state != 0) {
+                                    data.states[edge] = state;
+                                    data.biome = stateBiomeAndLight >> 8;
+                                    data.light = (byte) stateBiomeAndLight;
                                 }
                             }
                         }

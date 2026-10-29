@@ -49,6 +49,17 @@ public interface FExtendedStateRegistryData {
     byte type(int state) throws IndexOutOfBoundsException;
 
     /**
+     * Checks whether the given state is a translucent fluid, i.e. water.
+     * <p>
+     * Opaque fluids (such as lava) are not considered water, as they cannot be seen through.
+     *
+     * @param state the state ID
+     * @return whether the given state is water
+     * @throws IndexOutOfBoundsException if {@code state} is not a valid state ID
+     */
+    boolean isWater(int state) throws IndexOutOfBoundsException;
+
+    /**
      * Gets the light attributes for the given state ID.
      * <p>
      * The resulting value represents light attributes packed together by {@link BlockLevelConstants#packLightAttrs(int, int)}.

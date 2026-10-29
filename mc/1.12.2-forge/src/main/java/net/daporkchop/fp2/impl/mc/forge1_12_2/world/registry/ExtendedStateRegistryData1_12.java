@@ -21,6 +21,7 @@ package net.daporkchop.fp2.impl.mc.forge1_12_2.world.registry;
 
 import lombok.NonNull;
 import net.daporkchop.fp2.core.world.registry.AbstractDenseExtendedStateRegistryData;
+import net.minecraft.block.material.Material;
 import net.minecraft.block.state.IBlockState;
 import net.minecraft.util.math.MathHelper;
 
@@ -43,6 +44,11 @@ public final class ExtendedStateRegistryData1_12 extends AbstractDenseExtendedSt
         } else {
             return BLOCK_TYPE_INVISIBLE;
         }
+    }
+
+    @Override
+    protected boolean isWater(int id, IBlockState state) {
+        return state.getMaterial() == Material.WATER;
     }
 
     @SuppressWarnings("deprecation")

@@ -172,20 +172,29 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
                             if (dir != EDGE_DIR_NONE) {
                                 dstEdges[di] |= (dir << (edge << 1));
                                 int state = data.states[edge];
-                                if (state != 0) {
-                                    int stateIdx = di * EDGE_COUNT + edge;
-                                    int existingState = dstStates[stateIdx];
-                                    if (existingState == 0) {
+                                if (state == 0) {
+                                    //a face without a block state would be baked with the air texture, i.e. turn into a hole. this
+                                    //  shouldn't happen with data produced by the generators, but the reference QEF scaler guards
+                                    //  against it as well, and a hole in the mesh is a really nasty thing to debug
+                                    state = 1;
+                                }
+
+                                int stateIdx = di * EDGE_COUNT + edge;
+                                int existingState = dstStates[stateIdx];
+                                if (existingState == 0) {
+                                    dstStates[stateIdx] = state;
+                                    dstBiomeAndLight[di] = (data.biome << 8) | (data.light & 0xFF);
+                                } else {
+                                    byte existingType = this.extendedStateRegistryData().type(existingState);
+                                    byte newType = this.extendedStateRegistryData().type(state);
+                                    // OPAQUE always takes precedence over non-opaque (prevents leaves from erasing solid ground).
+                                    //  this also covers the water/seabed collision on high detail levels: a water surface and the
+                                    //  ground below it share a single edge, and keeping the water would drop the ground from the
+                                    //  mesh entirely (the sky would show through the translucent water). keeping the solid block
+                                    //  makes the water surface disappear from the coarse mesh instead, which is far less visible.
+                                    if (newType == BLOCK_TYPE_OPAQUE || existingType != BLOCK_TYPE_OPAQUE) {
                                         dstStates[stateIdx] = state;
                                         dstBiomeAndLight[di] = (data.biome << 8) | (data.light & 0xFF);
-                                    } else {
-                                        byte existingType = this.extendedStateRegistryData().type(existingState);
-                                        byte newType = this.extendedStateRegistryData().type(state);
-                                        // OPAQUE always takes precedence over non-opaque (prevents leaves from erasing solid ground)
-                                        if (newType == BLOCK_TYPE_OPAQUE || existingType != BLOCK_TYPE_OPAQUE) {
-                                            dstStates[stateIdx] = state;
-                                            dstBiomeAndLight[di] = (data.biome << 8) | (data.light & 0xFF);
-                                        }
                                     }
                                 }
                             }

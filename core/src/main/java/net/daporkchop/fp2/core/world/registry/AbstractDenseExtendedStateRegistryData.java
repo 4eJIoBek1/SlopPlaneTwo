@@ -38,6 +38,7 @@ public abstract class AbstractDenseExtendedStateRegistryData<STATE> implements F
     private final FGameRegistry registry;
 
     private final byte[] types;
+    private final byte[] waterFlags;
     private final byte[] lightAttrs;
 
     public AbstractDenseExtendedStateRegistryData(@NonNull FGameRegistry registry) {
@@ -45,6 +46,7 @@ public abstract class AbstractDenseExtendedStateRegistryData<STATE> implements F
 
         int length = registry.statesCount();
         byte[] types = new byte[length];
+        byte[] waterFlags = new byte[length];
         byte[] lightAttrs = new byte[length];
         for (int id = 0; id < length; id++) {
             STATE state = uncheckedCast(registry.id2state(id));
@@ -57,13 +59,17 @@ public abstract class AbstractDenseExtendedStateRegistryData<STATE> implements F
             Preconditions.checkState(BlockLevelConstants.isValidLight(lightEmission), "for %s (id %s): invalid light emission %s", state, id, lightEmission);
 
             types[id] = (byte) type;
+            waterFlags[id] = (byte) (this.isWater(id, state) ? 1 : 0);
             lightAttrs[id] = BlockLevelConstants.packLightAttrs(lightOpacity, lightEmission);
         }
         this.types = types;
+        this.waterFlags = waterFlags;
         this.lightAttrs = lightAttrs;
     }
 
     protected abstract int type(int id, STATE state);
+
+    protected abstract boolean isWater(int id, STATE state);
 
     protected abstract int lightOpacity(int id, STATE state);
 
@@ -72,6 +78,11 @@ public abstract class AbstractDenseExtendedStateRegistryData<STATE> implements F
     @Override
     public final byte type(int state) throws IndexOutOfBoundsException {
         return this.types[state];
+    }
+
+    @Override
+    public final boolean isWater(int state) throws IndexOutOfBoundsException {
+        return this.waterFlags[state] != 0;
     }
 
     @Override
