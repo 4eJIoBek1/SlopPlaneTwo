@@ -29,6 +29,7 @@ import net.daporkchop.fp2.core.engine.Tile;
 import net.daporkchop.fp2.core.engine.TileData;
 import net.daporkchop.fp2.core.engine.TilePos;
 import net.daporkchop.fp2.core.engine.api.ctx.IFarClientContext;
+import net.daporkchop.fp2.core.engine.client.RenderConstants;
 import net.daporkchop.fp2.core.engine.client.struct.VoxelLocalAttributes;
 import net.daporkchop.fp2.core.engine.util.TilePosSingleLevelAABBSet;
 import net.daporkchop.fp2.core.util.GlobalAllocators;
@@ -50,6 +51,12 @@ import static net.daporkchop.fp2.core.util.math.MathUtil.*;
  * @author DaPorkchop_
  */
 public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
+    /**
+     * How many voxels the search for the surface of a neighbouring tile may descend or ascend. A bigger step at a tile border (a cliff, where the surfaces
+     *  of the two tiles have nothing to do with each other) is left alone, as stretching a face that far would look worse than the gap itself.
+     */
+    protected static final int SEAM_SEARCH_RADIUS = 8;
+
     protected static int vertexMapIndex(int dx, int dy, int dz, int i, int edge) {
         int j = CONNECTION_INDICES[i];
         int ddx = dx + ((j >> 2) & 1);
@@ -124,7 +131,7 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
             this.writeVertices(srcs, pos.minBlockX(), pos.minBlockY(), pos.minBlockZ(), pos.level(), map, output.verts);
 
             //step 2: write indices to actually connect the vertices and build the mesh
-            this.writeIndices(srcs[0], map, output.indicesPerPass);
+            this.writeIndices(srcs, srcs[0], pos.minBlockX(), pos.minBlockY(), pos.minBlockZ(), pos.level(), map, output.verts, output.indicesPerPass);
         } finally {
             alloc.release(map);
         }
@@ -204,8 +211,9 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
         }
     }
 
-    protected void writeIndices(Tile src, int[] map, IndexWriter[] indices) {
+    protected void writeIndices(Tile[] srcs, Tile src, int blockX, int blockY, int blockZ, int level, int[] map, AttributeWriter<VoxelLocalAttributes> verts, IndexWriter[] indices) {
         final TileData data = new TileData();
+        final TileData probe = new TileData();
 
         for (int j = 0; j < src.count(); j++) {
             int voxelPos = src.get(j, data);
@@ -223,13 +231,10 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
                 }
 
                 int base = edge * CONNECTION_INDEX_COUNT;
-                int oppositeCorner, c0, c1, provoking;
-                if ((provoking = map[vertexMapIndex(dx, dy, dz, base, edge)]) < 0
-                        || (c0 = map[vertexMapIndex(dx, dy, dz, base + 1, edge)]) < 0
-                        || (c1 = map[vertexMapIndex(dx, dy, dz, base + 2, edge)]) < 0
-                        || (oppositeCorner = map[vertexMapIndex(dx, dy, dz, base + 3, edge)]) < 0) {
-                    continue; //skip if any of the vertices are missing
-                }
+                int provoking = this.vertex(srcs, probe, map, data, dx, dy, dz, base, edge, blockX, blockY, blockZ, level, verts);
+                int c0 = this.vertex(srcs, probe, map, data, dx, dy, dz, base + 1, edge, blockX, blockY, blockZ, level, verts);
+                int c1 = this.vertex(srcs, probe, map, data, dx, dy, dz, base + 2, edge, blockX, blockY, blockZ, level, verts);
+                int oppositeCorner = this.vertex(srcs, probe, map, data, dx, dy, dz, base + 3, edge, blockX, blockY, blockZ, level, verts);
 
                 IndexWriter buf = indices[this.levelRenderer.renderTypeForState(data.states[edge])];
 
@@ -252,6 +257,129 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
                 this.appendQuad(buf, oppositeCorner, c0, c1, provoking);
             }
         }
+    }
+
+    /**
+     * Gets the index of the vertex at the given corner of a face.
+     * <p>
+     * The corners on the border planes of a tile are supplied by the neighbouring tiles, which is why only the first layer of the neighbours is written into
+     *  the vertex map. If the neighbour was produced by another generator (a tile overlapping vanilla terrain is scaled from it, while the one beyond it is
+     *  generated from a density field) or from a coarser detail level, its surface sits at a different height and it has no voxel where this corner expects
+     *  one, in which case the face would previously have been dropped completely and left a hole in the terrain.
+     * <p>
+     * Instead, the missing vertex is pinned onto the surface of the neighbouring tile: the closest voxel of it in the same column is used, so that the face
+     *  of this tile reaches the neighbouring surface. Merely clamping the corner onto the border plane (the fallback for when the neighbour has no voxel
+     *  nearby) is not enough, as both surfaces would then just end at the border at different heights with a see-through slit in between.
+     */
+    protected int vertex(Tile[] srcs, TileData probe, int[] map, TileData data, int dx, int dy, int dz, int i, int edge, int blockX, int blockY, int blockZ, int level, AttributeWriter<VoxelLocalAttributes> verts) {
+        int j = CONNECTION_INDICES[i];
+        int gx = dx + ((j >> 2) & 1);
+        int gy = dy + ((j >> 1) & 1);
+        int gz = dz + (j & 1);
+
+        int index = ((gx * T_VERTS + gy) * T_VERTS + gz) * EDGE_COUNT + edge;
+        int vertex = map[index];
+        if (vertex < 0) { //the tile which would have to provide this vertex didn't have it
+            int neighbourGy = this.findNeighbourVoxel(srcs, gx, gy, gz, edge, this.levelRenderer.renderTypeForState(surfaceState(data, edge)), level, probe);
+            map[index] = vertex = this.appendFilledVertex(data, gx, neighbourGy < 0 ? gy : neighbourGy, gz, edge, blockX, blockY, blockZ, level, verts, neighbourGy < 0 ? data : probe);
+        }
+        return vertex;
+    }
+
+    /**
+     * Gets the block state which is responsible for the geometry of the given edge of a voxel, falling back to the other axes if the edge itself carries none.
+     */
+    protected static int surfaceState(TileData data, int edge) {
+        int state = data.states[edge];
+        if (state == 0) { //fall back to the state of another axis if this one carries none
+            state = data.states[1];
+        }
+        if (state == 0) {
+            state = data.states[0] != 0 ? data.states[0] : data.states[2];
+        }
+        return state;
+    }
+
+    /**
+     * Finds the voxel of the neighbouring tile which is closest to the requested height in the column of the given corner. Since a corner on a border plane
+     *  belongs to a neighbouring tile, the column is looked up there; the vertical search covers the height difference between two generators or detail
+     *  levels meeting at the border.
+     * <p>
+     * Only voxels belonging to the same kind of surface are accepted: pinning a corner of solid terrain onto the surface of water (or the other way around)
+     *  drags the face down to the water level or up to the shore, which leaves a thin sliver of sky along the shoreline. The water and the shore are separate
+     *  surfaces, so they are left to end at the border plane as before.
+     *
+     * @param out receives the found voxel
+     * @return the grid Y of the found voxel, or {@code -1} if the corner isn't on a border plane, the neighbouring tile is missing, or it has no voxel of a
+     *         matching surface anywhere near the requested height
+     */
+    protected int findNeighbourVoxel(Tile[] srcs, int gx, int gy, int gz, int edge, int faceType, int level, TileData out) {
+        int tileIndex = 0;
+        if (gx == T_VOXELS) {
+            tileIndex |= 4;
+        }
+        if (gz == T_VOXELS) {
+            tileIndex |= 1;
+        }
+        if (tileIndex == 0) { //the corner is inside our own tile, so the neighbours have nothing to do with it
+            return -1;
+        }
+
+        Tile neighbour = srcs[tileIndex];
+        if (neighbour == null) { //the neighbouring tile isn't loaded yet
+            return -1;
+        }
+
+        final int lx = gx & T_MASK;
+        final int lz = gz & T_MASK;
+        final boolean transparent = faceType == RenderConstants.LAYER_TRANSPARENT;
+
+        for (int d = 0; d <= SEAM_SEARCH_RADIUS; d++) {
+            for (int side = 0; side < (d == 0 ? 1 : 2); side++) {
+                int y = side == 0 ? gy + d : gy - d;
+                if (y < 0 || y >= T_VOXELS || !neighbour.get(lx, y, lz, out) || out.edges == 0) {
+                    continue;
+                }
+                if ((this.levelRenderer.renderTypeForState(surfaceState(out, edge)) == RenderConstants.LAYER_TRANSPARENT) == transparent) {
+                    return y;
+                }
+            }
+        }
+
+        return -1;
+    }
+
+    /**
+     * Appends a vertex for a corner of the given face which should have been provided by a neighbouring tile, but wasn't.
+     * <p>
+     * The position is the given grid position offset by the fractional offsets of {@code src}: either the voxel the face belongs to (clamped onto the corner
+     *  of its cell, which keeps the face on the border plane) or the voxel of the neighbouring tile the corner was pinned onto. The remaining attributes are
+     *  always taken from the voxel the face belongs to, so that the patch keeps the texture and the light of our own terrain.
+     */
+    protected int appendFilledVertex(TileData data, int gx, int gy, int gz, int edge, int blockX, int blockY, int blockZ, int level, AttributeWriter<VoxelLocalAttributes> verts, TileData src) {
+        final int fractMask = this.forceBlockyMesh ? 0 : -1;
+
+        int state = surfaceState(data, edge);
+
+        verts.append()
+                .light((BlockLevelConstants.unpackBlockLight(data.light) << 4) | 8, (BlockLevelConstants.unpackSkyLight(data.light) << 4) | 8)
+                .pos(cornerPos(gx, src.x & fractMask), cornerPos(gy, src.y & fractMask), cornerPos(gz, src.z & fractMask))
+                .state(this.textureUVs.state2index(state))
+                .color(this.levelRenderer.tintFactorForStateInBiomeAtPos(state, data.biome, blockX + (gx << level), blockY + (gy << level), blockZ + (gz << level)))
+                .close();
+        return verts.size() - 1;
+    }
+
+    /**
+     * Gets the position of the given grid coordinate within the tile.
+     * <p>
+     * On the far border plane (grid == {@link net.daporkchop.fp2.core.engine.EngineConstants#T_VOXELS}) the offset is deliberately kept as well, which pushes
+     *  the vertex past the tile border by up to one voxel: the neighbouring tile's surface sits at a different height (it was produced by a different
+     *  generator, or by a coarser detail level), so the two tiles only meet if each of them spills over the border by one voxel. Ending both surfaces exactly
+     *  on the border plane instead leaves a one-voxel-tall slit between them for as long as the border is, which is visible as a hole showing the sky.
+     */
+    private static int cornerPos(int grid, int fract) {
+        return (grid << POS_FRACT_SHIFT) + fract;
     }
 
     private void appendQuad(IndexWriter indices, int oppositeCorner, int c0, int c1, int provoking) {

@@ -545,6 +545,10 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
 
     /**
      * Draws the deferred translucent pass of the far terrain after vanilla translucent terrain has been rendered.
+     * <p>
+     * The far water is drawn at its true height. It used to be shifted 1/9 of a block down (by raising the camera for this pass) so that vanilla water, which is
+     *  rendered first and is lower than a full water block, would win where the two overlap. That shift left a 1/9 block tall step between the far water and the
+     *  far shoreline, which showed up as a thin bright line along every shore, so it was removed - the overlap with vanilla water has to be handled per tile.
      */
     public void renderTranslucentPass() {
         val drawableMask = this.deferredTranslucentDrawableMask;
@@ -560,21 +564,8 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
         try (val ignored = this.statePreserverDraw.backup()) {
             this.preRenderTranslucent(drawArguments);
 
-            CameraState waterCameraState = drawArguments.cameraState.clone();
-            double camY = waterCameraState.positionFloorY + (double) waterCameraState.positionFracY + (1.0d / 9.0d + 0.005d);
-            double floorY = Math.floor(camY);
-            waterCameraState.positionFloorY = (int) floorY;
-            waterCameraState.positionFracY = (float) (camY - floorY);
-            try (val uniforms = this.cameraStateUniformsBuffer.update()) {
-                waterCameraState.configureUniforms(uniforms);
-            }
-
             this.renderTransparentStencilPass(drawableMask, drawArguments, capturedShaderPrograms);
             this.renderTransparentFragmentPass(drawableMask, drawArguments, capturedShaderPrograms);
-
-            try (val uniforms = this.cameraStateUniformsBuffer.update()) {
-                drawArguments.cameraState.configureUniforms(uniforms);
-            }
 
             this.postRender(drawArguments);
         }
@@ -604,17 +595,9 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
         }
 
         try (val ignored = this.statePreserverDraw.backup()) { //back up opengl state prior to rendering
-            CameraState waterCameraState = cameraState.clone();
-            double camY = waterCameraState.positionFloorY + (double) waterCameraState.positionFracY + (1.0d / 9.0d + 0.005d);
-            double floorY = Math.floor(camY);
-            waterCameraState.positionFloorY = (int) floorY;
-            waterCameraState.positionFracY = (float) (camY - floorY);
-            try (val uniforms = this.cameraStateUniformsBuffer.update()) {
-                waterCameraState.configureUniforms(uniforms);
-            }
-
             //the uniform buffers are restored to their previous values when the regular render pass ends, but the captured geometry still needs the camera
-            //  state in order to compute camera-relative vertex positions. note that these binding points are the same ones used by preRender().
+            //  state in order to compute camera-relative vertex positions. note that these binding points are the same ones used by preRender(). the camera
+            //  state itself is left as-is: the far water is drawn at its true height, see renderTranslucentPass().
             this.gl.glBindBufferBase(GL_UNIFORM_BUFFER, RenderConstants.CAMERA_STATE_UNIFORMS_UBO_BINDING, this.cameraStateUniformsBuffer.buffer().id());
             this.gl.glBindBufferBase(GL_UNIFORM_BUFFER, RenderConstants.DRAW_STATE_UNIFORMS_UBO_BINDING, this.drawStateUniformsBuffer.buffer().id());
 
@@ -627,7 +610,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
             //bind the block texture UVs, which are used to look up the texture coordinates of the block face each vertex belongs to
             this.levelRenderer.textureUVs().gpuQuadLists().bind(this.gl);
 
-            this.renderIndex.drawShaderPackWater(waterCameraState, shaderPack, xfbShaderProgram);
+            this.renderIndex.drawShaderPackWater(cameraState, shaderPack, xfbShaderProgram);
 
             try (val uniforms = this.cameraStateUniformsBuffer.update()) {
                 cameraState.configureUniforms(uniforms);
