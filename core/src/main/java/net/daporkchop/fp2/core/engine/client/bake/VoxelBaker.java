@@ -319,6 +319,10 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
     protected static final int TYPE_BLOCKY = 1;
     protected static final int TYPE_SMOOTH = 2;
 
+    protected static final int AIR_ABOVE = -1;
+    protected static final int OVERHANG_SKIP = -2;
+    protected static final int SOLID_BELOW = -3;
+
     protected int tileType(Tile tile, TileData probe) {
         if (tile == null || tile.count() == 0) {
             return TYPE_NONE;
@@ -336,12 +340,16 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
         return TYPE_BLOCKY;
     }
 
-    protected int stackType(Tile t0, Tile t1, TileData probe) {
-        int type0 = this.tileType(t0, probe);
-        if (type0 != TYPE_NONE) {
-            return type0;
+    protected int groupType(Tile[] tiles, TileData probe) {
+        for (Tile t : tiles) {
+            if (t != null && t.count() > 0) {
+                int type = this.tileType(t, probe);
+                if (type != TYPE_NONE) {
+                    return type;
+                }
+            }
         }
-        return this.tileType(t1, probe);
+        return TYPE_NONE;
     }
 
     protected boolean isBlocky(Tile tile, TileData probe) {
@@ -350,19 +358,27 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
 
     protected void writeSkirt(Tile[] srcs, Tile src, GapList gaps, int blockX, int blockY, int blockZ, int level, AttributeWriter<VoxelLocalAttributes> verts, IndexWriter[] indices) {
         final TileData probe = new TileData();
-        int ourType = this.stackType(srcs[0], srcs[2], probe);
-        if (ourType == TYPE_NONE) {
-            return;
+
+        // X-axis: our side is dx=0 (srcs[0,2,1,3]), neighbour side is dx=1 (srcs[4,6,5,7])
+        int ourTypeX = this.groupType(new Tile[]{ srcs[0], srcs[2], srcs[1], srcs[3] }, probe);
+        int theirTypeX = this.groupType(new Tile[]{ srcs[4], srcs[6], srcs[5], srcs[7] }, probe);
+        if (ourTypeX != TYPE_NONE || theirTypeX != TYPE_NONE) {
+            int ourT = ourTypeX != TYPE_NONE ? ourTypeX : (theirTypeX == TYPE_BLOCKY ? TYPE_SMOOTH : TYPE_BLOCKY);
+            int theirT = theirTypeX != TYPE_NONE ? theirTypeX : (ourTypeX == TYPE_BLOCKY ? TYPE_SMOOTH : TYPE_BLOCKY);
+            if (ourT != theirT) {
+                this.buildSeamAxis(true, ourT, theirT, srcs, gaps, blockX, blockY, blockZ, level, verts, indices);
+            }
         }
 
-        int theirTypeX = this.stackType(srcs[4], srcs[6], probe);
-        if (theirTypeX != TYPE_NONE && ourType != theirTypeX) {
-            this.buildSeamAxis(true, ourType, theirTypeX, srcs, gaps, blockX, blockY, blockZ, level, verts, indices);
-        }
-
-        int theirTypeZ = this.stackType(srcs[1], srcs[3], probe);
-        if (theirTypeZ != TYPE_NONE && ourType != theirTypeZ) {
-            this.buildSeamAxis(false, ourType, theirTypeZ, srcs, gaps, blockX, blockY, blockZ, level, verts, indices);
+        // Z-axis: our side is dz=0 (srcs[0,2,4,6]), neighbour side is dz=1 (srcs[1,3,5,7])
+        int ourTypeZ = this.groupType(new Tile[]{ srcs[0], srcs[2], srcs[4], srcs[6] }, probe);
+        int theirTypeZ = this.groupType(new Tile[]{ srcs[1], srcs[3], srcs[5], srcs[7] }, probe);
+        if (ourTypeZ != TYPE_NONE || theirTypeZ != TYPE_NONE) {
+            int ourT = ourTypeZ != TYPE_NONE ? ourTypeZ : (theirTypeZ == TYPE_BLOCKY ? TYPE_SMOOTH : TYPE_BLOCKY);
+            int theirT = theirTypeZ != TYPE_NONE ? theirTypeZ : (ourTypeZ == TYPE_BLOCKY ? TYPE_SMOOTH : TYPE_BLOCKY);
+            if (ourT != theirT) {
+                this.buildSeamAxis(false, ourT, theirT, srcs, gaps, blockX, blockY, blockZ, level, verts, indices);
+            }
         }
     }
 
@@ -415,9 +431,19 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
                 clampedOur[perp] = Math.max(0, Math.min(tilePlaneTop, rawVal));
                 ourStates[perp] = surfaceState(ours, 1);
                 ourLights[perp] = ours.light;
-            } else {
-                rawOur[perp] = -1;
+            } else if (ourY == SOLID_BELOW) {
+                rawOur[perp] = tilePlaneTop;
+                clampedOur[perp] = tilePlaneTop;
+                ourStates[perp] = 1;
+                ourLights[perp] = (byte) ((15 << 4) | 15);
+            } else if (ourY == AIR_ABOVE) {
+                rawOur[perp] = 0;
                 clampedOur[perp] = 0;
+                ourStates[perp] = 0;
+                ourLights[perp] = 0;
+            } else { // OVERHANG_SKIP (-2)
+                rawOur[perp] = -1;
+                clampedOur[perp] = -1;
                 ourStates[perp] = 0;
                 ourLights[perp] = 0;
             }
@@ -431,52 +457,79 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
                 clampedTheir[perp] = Math.max(0, Math.min(tilePlaneTop, rawVal));
                 theirStates[perp] = surfaceState(theirs, 1);
                 theirLights[perp] = theirs.light;
-            } else {
-                rawTheir[perp] = -1;
+            } else if (theirY == SOLID_BELOW) {
+                rawTheir[perp] = tilePlaneTop;
+                clampedTheir[perp] = tilePlaneTop;
+                theirStates[perp] = 1;
+                theirLights[perp] = (byte) ((15 << 4) | 15);
+            } else if (theirY == AIR_ABOVE) {
+                rawTheir[perp] = 0;
                 clampedTheir[perp] = 0;
+                theirStates[perp] = 0;
+                theirLights[perp] = 0;
+            } else { // OVERHANG_SKIP (-2)
+                rawTheir[perp] = -1;
+                clampedTheir[perp] = -1;
                 theirStates[perp] = 0;
                 theirLights[perp] = 0;
             }
 
-            // Determine if column is valid (Refinement 1)
-            if (ourY >= 0 && theirY >= 0) {
-                validCol[perp] = true;
-            } else if (ourY >= 0 && theirY < 0) {
-                if (clampedOur[perp] > 0) {
+            // Determine if column is valid
+            if (clampedOur[perp] >= 0 && clampedTheir[perp] >= 0) {
+                if (clampedOur[perp] == 0 && clampedTheir[perp] == 0) {
+                    // Both in open air: no seam
+                    validCol[perp] = false;
+                } else if (clampedOur[perp] == tilePlaneTop && clampedTheir[perp] == tilePlaneTop) {
+                    // Both underground solid: no seam
+                    validCol[perp] = false;
+                } else {
                     validCol[perp] = true;
+                    if (clampedOur[perp] != clampedTheir[perp]) {
+                        anySeam = true;
+                    }
                 }
-            } else if (ourY < 0 && theirY >= 0) {
-                if (clampedTheir[perp] > 0) {
-                    validCol[perp] = true;
-                }
+            } else {
+                // OVERHANG_SKIP on at least one side: do not build curtain
+                validCol[perp] = false;
             }
 
             if (validCol[perp]) {
-                if (clampedOur[perp] != clampedTheir[perp]) {
-                    anySeam = true;
+                int state;
+                byte light;
+                if (ourY >= 0 && theirY >= 0) {
+                    boolean theirsHigher = clampedTheir[perp] >= clampedOur[perp];
+                    int sHigh = theirsHigher ? theirStates[perp] : ourStates[perp];
+                    int sLow = theirsHigher ? ourStates[perp] : theirStates[perp];
+                    byte lHigh = theirsHigher ? theirLights[perp] : ourLights[perp];
+                    byte lLow = theirsHigher ? ourLights[perp] : theirLights[perp];
+
+                    state = sHigh;
+                    if (sLow != 0 && this.levelRenderer.renderTypeForState(state) != RenderConstants.LAYER_SOLID
+                            && this.levelRenderer.renderTypeForState(sLow) == RenderConstants.LAYER_SOLID) {
+                        state = sLow;
+                    }
+                    if (state == 0) {
+                        state = sLow != 0 ? sLow : (sHigh != 0 ? sHigh : 1);
+                    }
+                    light = lHigh != 0 ? lHigh : lLow;
+                } else if (ourY >= 0) {
+                    state = ourStates[perp];
+                    light = ourLights[perp];
+                } else if (theirY >= 0) {
+                    state = theirStates[perp];
+                    light = theirLights[perp];
+                } else {
+                    state = 1;
+                    light = (byte) ((15 << 4) | 15);
                 }
 
-                // State & light selection (Refinement 3)
-                boolean theirsHigher = clampedTheir[perp] >= clampedOur[perp];
-                int sHigh = theirsHigher ? theirStates[perp] : ourStates[perp];
-                int sLow = theirsHigher ? ourStates[perp] : theirStates[perp];
-                byte lHigh = theirsHigher ? theirLights[perp] : ourLights[perp];
-                byte lLow = theirsHigher ? ourLights[perp] : theirLights[perp];
-
-                int state = sHigh;
-                if (sLow != 0 && this.levelRenderer.renderTypeForState(state) != RenderConstants.LAYER_SOLID
-                        && this.levelRenderer.renderTypeForState(sLow) == RenderConstants.LAYER_SOLID) {
-                    state = sLow;
-                }
                 if (state == 0) {
-                    state = sLow != 0 ? sLow : (sHigh != 0 ? sHigh : 1);
+                    state = 1;
                 }
-                seamState[perp] = state;
-
-                byte light = lHigh != 0 ? lHigh : lLow;
                 if (light == 0) {
                     light = (byte) ((15 << 4) | 15);
                 }
+                seamState[perp] = state;
                 seamLight[perp] = light;
 
                 if (ourIsBlocky) {
@@ -570,82 +623,65 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
     }
 
     protected int findColumnGroundSurface(Tile tile0, Tile tile1, int colX, int colZ, TileData out) {
-        int surfaceY = -1;
         TileData probe = new TileData();
 
-        // 1. Search top-down in upper tile (dy=1, height 16..31)
-        if (tile1 != null) {
-            int y1 = this.findSurfaceInColumn(tile1, colX, colZ, -1, -1, probe);
-            if (y1 >= 0) {
-                surfaceY = y1 + T_VOXELS;
-                copyTileData(probe, out);
-            }
-        }
-
-        // 2. If not found in upper tile, search in lower tile (dy=0, height 0..15)
-        if (surfaceY < 0 && tile0 != null) {
+        // 1. Search FIRST in current tile0 (dy=0, height 0..15)
+        if (tile0 != null && tile0.count() > 0) {
             int y0 = this.findSurfaceInColumn(tile0, colX, colZ, -1, -1, probe);
             if (y0 >= 0) {
-                surfaceY = y0;
                 copyTileData(probe, out);
-            }
-        }
 
-        if (surfaceY < 0) {
-            return -1;
-        }
+                // Overhang detection: does this surface voxel have an open ceiling face underneath?
+                int ceilingY = -1;
+                if (((out.edges >> 2) & EDGE_DIR_NEGATIVE) != 0) {
+                    ceilingY = y0;
+                }
 
-        // 3. Overhang detection: check if surfaceY is an external overhang with air below (Refinement 2)
-        int ceilingY = -1;
-        int ceilingSkyLight = 0;
+                int lowerGroundY = -1;
+                TileData groundData = new TileData();
 
-        // Check if surfaceY itself has a downward-facing ceiling face
-        if (((out.edges >> 2) & EDGE_DIR_NEGATIVE) != 0) {
-            ceilingY = surfaceY;
-            ceilingSkyLight = BlockLevelConstants.unpackSkyLight(out.light);
-        }
-
-        // Scan downwards below surfaceY
-        int lowerGroundY = -1;
-        TileData groundData = new TileData();
-
-        for (int y = surfaceY - 1; y >= 0; y--) {
-            boolean hasVoxel = getVoxelInStack(tile0, tile1, colX, colZ, y, probe);
-            if (hasVoxel && probe.edges != 0) {
-                if (((probe.edges >> 2) & EDGE_DIR_NEGATIVE) != 0) {
-                    ceilingY = y;
-                    int sky = BlockLevelConstants.unpackSkyLight(probe.light);
-                    if (sky > ceilingSkyLight) {
-                        ceilingSkyLight = sky;
-                    }
-                } else if (ceilingY >= 0 && ((probe.edges >> 2) & EDGE_DIR_POSITIVE) != 0) {
-                    int state = surfaceState(probe, 1);
-                    if (!this.levelRenderer.isFoliage(state)) {
-                        lowerGroundY = y;
-                        copyTileData(probe, groundData);
-                        break;
+                for (int y = y0 - 1; y >= 0; y--) {
+                    if (tile0.get(colX, y, colZ, probe) && probe.edges != 0) {
+                        if (((probe.edges >> 2) & EDGE_DIR_NEGATIVE) != 0) {
+                            ceilingY = y;
+                        } else if (ceilingY >= 0 && ((probe.edges >> 2) & EDGE_DIR_POSITIVE) != 0) {
+                            int state = surfaceState(probe, 1);
+                            if (!this.levelRenderer.isFoliage(state)) {
+                                lowerGroundY = y;
+                                copyTileData(probe, groundData);
+                                break;
+                            }
+                        }
                     }
                 }
-            }
-        }
 
-        if (ceilingY >= 0) {
-            boolean isExternalOverhang = (ceilingSkyLight > 0)
-                    || (lowerGroundY >= 0 && BlockLevelConstants.unpackSkyLight(groundData.light) > 0);
-
-            if (isExternalOverhang) {
-                if (lowerGroundY >= 0) {
-                    // Use the lower ground surface beneath the overhang
-                    copyTileData(groundData, out);
-                    return lowerGroundY;
-                } else {
-                    // External overhang with only open air below: do not drop a curtain into the canyon
-                    return -1;
+                if (ceilingY >= 0) {
+                    if (lowerGroundY >= 0) {
+                        // There is solid ground below the visor in this tile: seal to lower ground!
+                        copyTileData(groundData, out);
+                        return lowerGroundY;
+                    } else {
+                        // Visor hanging over empty air with no ground below in this tile:
+                        // SKIP THIS COLUMN! Do not build a 15-block curtain into the canyon!
+                        return OVERHANG_SKIP;
+                    }
                 }
+
+                return y0;
             }
         }
 
-        return surfaceY;
+        // 2. No surface in tile0: check if current tile is underground (rock continues up into tile1)
+        if (tile1 != null && tile1.count() > 0) {
+            int y1 = this.findSurfaceInColumn(tile1, colX, colZ, -1, -1, probe);
+            if (y1 >= 0 || tile1.count() > 0) {
+                // Rock extends upward: in current tile, solid rock reaches the ceiling
+                return SOLID_BELOW;
+            }
+        }
+
+        // 3. Neither tile0 nor tile1 has solid terrain in this column: open air above ground
+        return AIR_ABOVE;
     }
 
     private static void copyTileData(TileData src, TileData dst) {
@@ -787,9 +823,9 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
     protected int appendFilledVertex(TileData data, int gx, int gy, int gz, int edge, int blockX, int blockY, int blockZ, int level, AttributeWriter<VoxelLocalAttributes> verts) {
         final int fractMask = this.forceBlockyMesh ? 0 : -1;
 
-        int posX = gx == T_VOXELS ? (T_VOXELS << POS_FRACT_SHIFT) : (gx << POS_FRACT_SHIFT) + (data.x & fractMask);
+        int posX = gx == T_VOXELS ? (T_VOXELS << POS_FRACT_SHIFT) : (gx == 0 ? 0 : (gx << POS_FRACT_SHIFT) + (data.x & fractMask));
         int posY = (gy << POS_FRACT_SHIFT) + (data.y & fractMask);
-        int posZ = gz == T_VOXELS ? (T_VOXELS << POS_FRACT_SHIFT) : (gz << POS_FRACT_SHIFT) + (data.z & fractMask);
+        int posZ = gz == T_VOXELS ? (T_VOXELS << POS_FRACT_SHIFT) : (gz == 0 ? 0 : (gz << POS_FRACT_SHIFT) + (data.z & fractMask));
 
         int state = surfaceState(data, edge);
 
