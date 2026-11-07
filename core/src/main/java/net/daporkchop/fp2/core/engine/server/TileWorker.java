@@ -45,6 +45,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.function.LongConsumer;
@@ -250,8 +251,8 @@ public class TileWorker implements SharedFutureScheduler.WorkFunction<PriorityTa
 
         //snapshot all tiles
         Map<TilePos, ITileSnapshot> snapshotsByPosition = this.provider.storage().multiSnapshot(uniqueValidSourcePositions).stream()
-                //no null checks are necessary, because we're only snapshotting the input positions which are valid, and therefore all snapshots will be non-null
-                .collect(Collectors.toMap(ITileSnapshot::pos, Function.identity()));
+                .filter(Objects::nonNull)
+                .collect(Collectors.toMap(ITileSnapshot::pos, Function.identity(), (a, b) -> a));
 
         if (state.considerExit()) {
             return;
@@ -270,7 +271,10 @@ public class TileWorker implements SharedFutureScheduler.WorkFunction<PriorityTa
                     //tile is only guaranteed to have been generated if it's at a valid position (we filter out invalid
                     // positions above in the scatterGather call)
                     if (this.provider.coordLimits().contains(srcPositions.get(i))) {
-                        srcs[i] = snapshotsByPosition.get(srcPositions.get(i)).loadTile(tileRecycler, Tile.CODEC);
+                        ITileSnapshot snapshot = snapshotsByPosition.get(srcPositions.get(i));
+                        if (snapshot != null) {
+                            srcs[i] = snapshot.loadTile(tileRecycler, Tile.CODEC);
+                        }
                     }
                 }
 

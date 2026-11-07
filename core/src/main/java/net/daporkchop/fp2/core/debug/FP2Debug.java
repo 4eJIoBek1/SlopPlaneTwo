@@ -31,6 +31,7 @@ import net.daporkchop.fp2.core.config.FP2Config;
 import net.daporkchop.fp2.core.engine.api.ctx.IFarClientContext;
 import net.daporkchop.fp2.core.engine.client.AbstractFarRenderer;
 import net.daporkchop.fp2.core.engine.client.FarTileCache;
+import net.daporkchop.fp2.core.engine.client.bake.SkirtDiag; //TEMP DIAG
 import net.daporkchop.fp2.core.network.packet.debug.client.CPacketDebugDropAllTiles;
 import net.daporkchop.fp2.core.network.packet.standard.client.CPacketClientConfig;
 import net.daporkchop.fp2.core.util.I18n;
@@ -69,6 +70,7 @@ public class FP2Debug {
                 }
             });
             category.addBinding("dropTiles", "9", () -> fp2.client().currentPlayer().ifPresent(player -> {
+                SkirtDiag.clear(); //TEMP DIAG
                 player.send(CPacketClientConfig.create(null));
                 player.send(CPacketClientConfig.create(fp2.globalConfig()));
                 fp2.client().chat().debug("§aReloading session");
@@ -76,6 +78,7 @@ public class FP2Debug {
             category.addBinding("regenerateTiles", "9", KeyModifier.CONTROL, () -> fp2.client().currentPlayer().ifPresent(player -> {
                 IFarClientContext context = player.activeContext();
                 if (context != null) {
+                    SkirtDiag.clear(); //TEMP DIAG
                     fp2.client().chat().debug("§aRegenerating all tiles");
                     player.send(CPacketDebugDropAllTiles.create(context.sessionId()));
                 }
@@ -83,6 +86,7 @@ public class FP2Debug {
             category.addBinding("reloadRenderer", "9", KeyModifier.SHIFT, () -> fp2.client().currentPlayer().ifPresent(player -> {
                 IFarClientContext context = player.activeContext();
                 if (context != null) {
+                    SkirtDiag.clear(); //TEMP DIAG
                     fp2.client().chat().debug("§aReloading renderer");
                     context.reloadRenderer();
                 }
@@ -90,6 +94,7 @@ public class FP2Debug {
             category.addBinding("rebakeTiles", "9", KeyModifier.ALT, () -> fp2.client().currentPlayer().ifPresent(player -> {
                 IFarClientContext context = player.activeContext();
                 if (context != null) {
+                    SkirtDiag.clear(); //TEMP DIAG
                     fp2.client().chat().debug("§aRe-baking tiles");
                     context.rebakeTiles();
                 }
@@ -116,6 +121,9 @@ public class FP2Debug {
                 fp2.globalConfig(config.withDebug(config.debug().withDebugColors(modes[(config.debug().debugColors().ordinal() + 1) % modes.length])));
                 fp2.client().chat().debug("§aSwitched debug color mode to §7" + fp2.globalConfig().debug().debugColors());
             });
+            category.addBinding("seamProfiler", "5", () -> { //TEMP DIAG
+                fp2.client().chat().debug(SkirtDiag.getDetailedChatReport()); //TEMP DIAG
+            }); //TEMP DIAG
         }
     }
 
@@ -136,6 +144,7 @@ public class FP2Debug {
             {
                 list.add("");
                 list.add("§lFarPlaneTwo (Client):");
+                list.add("§d" + SkirtDiag.getF3SeamInfo()); //TEMP DIAG
 
                 IFarClientContext context = player.activeContext();
                 if (context != null) {

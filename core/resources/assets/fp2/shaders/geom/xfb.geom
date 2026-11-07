@@ -120,6 +120,11 @@ void main() {
     //  (the latter is baked into the vertex color by the fragment shader path as well)
     vec3 vertexColor = max(gs_in[PROVOKING].color, vec3(quad.tint)) * diffuseLight(normal);
 
+    //TEMP DIAG: force skirt marker (magenta) to be vivid in transform feedback pass
+    if (gs_in[PROVOKING].color.r > 0.9 && gs_in[PROVOKING].color.g < 0.1 && gs_in[PROVOKING].color.b > 0.9) {
+        vertexColor = vec3(1.0, 0.0, 1.0);
+    }
+
     //pack the values which are constant for the whole triangle
     uint packedColor = packUnorm8(vertexColor.r) | (packUnorm8(vertexColor.g) << 8) | (packUnorm8(vertexColor.b) << 16) | (255u << 24);
     uint packedNormal = packSnorm8(normal.x) | (packSnorm8(normal.y) << 8) | (packSnorm8(normal.z) << 16);

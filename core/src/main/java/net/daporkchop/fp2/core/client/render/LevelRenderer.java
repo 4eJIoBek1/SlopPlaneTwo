@@ -42,6 +42,16 @@ public interface LevelRenderer {
     int renderTypeForState(int state);
 
     /**
+     * Checks whether the given block state represents foliage (leaves, plants) that should not form structural terrain seam walls.
+     *
+     * @param state the block state
+     * @return {@code true} if foliage
+     */
+    default boolean isFoliage(int state) {
+        return false;
+    }
+
+    /**
      * Gets the tint factor which will affect the texture color for the block state in the given biome at the given position.
      *
      * @param state the block state

@@ -33,9 +33,13 @@ import net.daporkchop.fp2.impl.mc.forge1_12_2.world.registry.GameRegistry1_12;
 import net.daporkchop.lib.common.misc.threadlocal.TL;
 import net.daporkchop.lib.common.pool.recycler.Recycler;
 import net.minecraft.block.Block;
+import net.minecraft.block.BlockBush;
 import net.minecraft.block.BlockLeaves;
+import net.minecraft.block.BlockLog;
 import net.minecraft.client.Minecraft;
 import net.minecraft.util.math.BlockPos;
+
+import java.util.BitSet;
 
 /**
  * @author DaPorkchop_
@@ -53,6 +57,7 @@ public class LevelRenderer1_12 implements LevelRenderer, AutoCloseable {
 
     protected final GameRegistry1_12 registry;
     protected final byte[] renderTypeLookup;
+    protected final BitSet foliageLookup;
 
     public LevelRenderer1_12(@NonNull Minecraft mc, @NonNull FLevelClient1_12 level) {
         this.fp2 = level.fp2();
@@ -63,10 +68,14 @@ public class LevelRenderer1_12 implements LevelRenderer, AutoCloseable {
 
         //look up and cache the render type for each block state
         this.renderTypeLookup = new byte[this.registry.statesCount()];
+        this.foliageLookup = new BitSet(this.registry.statesCount());
         this.registry.states().forEach(state -> {
             //TODO: i need to do something about this: grass is rendered as CUTOUT_MIPPED, which makes it always render both faces
 
             Block block = this.registry.id2state(state).getBlock();
+            if (block instanceof BlockLeaves || block instanceof BlockBush || block instanceof BlockLog) {
+                this.foliageLookup.set(state);
+            }
             int typeIndex;
             if (block instanceof BlockLeaves) {
                 // Far LOD leaves should be solid to avoid transparent holes into empty space
@@ -91,6 +100,11 @@ public class LevelRenderer1_12 implements LevelRenderer, AutoCloseable {
         });
 
         this.textureUVs = new TextureUVs1_12(this.fp2, level.registry(), mc);
+    }
+
+    @Override
+    public boolean isFoliage(int state) {
+        return state >= 0 && state < this.foliageLookup.size() && this.foliageLookup.get(state);
     }
 
     @Override

@@ -47,6 +47,7 @@ import net.daporkchop.lib.unsafe.PUnsafe;
 import org.rocksdb.ColumnFamilyHandle;
 import org.rocksdb.RocksDBException;
 import org.rocksdb.RocksIterator;
+import org.rocksdb.Status;
 import org.rocksdb.WriteBatch;
 
 import java.util.Arrays;
@@ -66,6 +67,11 @@ import static net.daporkchop.lib.common.util.PValidation.*;
  */
 @Getter
 public class RocksStorageInternal extends ReentrantReadWriteLock implements FStorageInternal {
+    /**
+     * How many individual deletions are collected into a single {@link WriteBatch} when a column family has to be cleared without range deletions. Flushing
+     *  periodically keeps the batch from growing to the size of the whole column family.
+     */
+    private static final int CLEAR_COLUMNS_BATCH_SIZE = 10_000;
     /*
      * Implementation notes:
      *
@@ -405,24 +411,33 @@ public class RocksStorageInternal extends ReentrantReadWriteLock implements FSto
             //increment modification counter in order to cause all the outstanding transactions to fail
             this.modificationCounter++;
         } catch (RocksDBException e) {
-            if ("DeleteRangeCF not implemented".equals(e.getMessage())) {
+            if (isDeleteRangeUnsupported(e)) {
                 //apparently we can't use DeleteRange in a TransactionDB, so we'll do the next best thing and iteratively issue a single delete for every key
                 try (WriteBatch batch = new WriteBatch()) {
+                    int batchSize = 0;
+
                     //iterate over each of the columns
                     for (FStorageColumn column : new ReferenceOpenHashSet<>(columns)) {
                         ColumnFamilyHandle handle = ((RocksStorageColumn) column).handle();
 
                         //create an iterator in the column family
                         try (RocksIterator itr = this.storage.db().newIterator(handle, RocksStorage.READ_OPTIONS)) {
-                            //delete every key individually
+                            //delete every key individually, flushing the batch every so often so that clearing a large column family doesn't need
+                            //  enough memory to hold a delete operation for all of its keys at once
                             for (itr.seekToFirst(); itr.isValid(); itr.next()) {
                                 batch.delete(handle, itr.key());
+                                if (++batchSize >= CLEAR_COLUMNS_BATCH_SIZE) {
+                                    this.storage.db().write(RocksStorage.WRITE_OPTIONS, batch);
+                                    batch.clear();
+                                    batchSize = 0;
+                                }
                             }
                         }
                     }
 
-                    //execute all the deleteRange()s
-                    this.storage.db().write(RocksStorage.WRITE_OPTIONS, batch);
+                    if (batchSize != 0) {
+                        this.storage.db().write(RocksStorage.WRITE_OPTIONS, batch);
+                    }
 
                     //increment modification counter in order to cause all the outstanding transactions to fail
                     this.modificationCounter++;
@@ -436,5 +451,21 @@ public class RocksStorageInternal extends ReentrantReadWriteLock implements FSto
         } finally {
             this.writeLock().unlock();
         }
+    }
+
+    /**
+     * Checks whether the given exception means that {@code WriteBatch::DeleteRange} isn't supported by the underlying database.
+     * <p>
+     * The transactional RocksDB implementations ({@link org.rocksdb.TransactionDB}, {@link org.rocksdb.OptimisticTransactionDB}, which is what this mod uses by
+     *  default) simply don't implement range deletions. Older rocksdbjni builds report it as {@code "DeleteRangeCF not implemented"}, newer ones return a
+     *  message-less {@code NotSupported} status - so the status code has to be checked as well, otherwise dropping all tiles (Ctrl+9 in debug mode) crashes the
+     *  server thread with {@code RocksDBException: NotSupported}.
+     */
+    private static boolean isDeleteRangeUnsupported(@NonNull RocksDBException e) {
+        Status status = e.getStatus();
+        if (status != null) {
+            return status.getCode() == Status.Code.NotSupported;
+        }
+        return "DeleteRangeCF not implemented".equals(e.getMessage());
     }
 }

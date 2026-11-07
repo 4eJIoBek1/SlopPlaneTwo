@@ -111,5 +111,10 @@ vec4 sampleTerrain(vec3 normal)  {
         color_out = color_out * (1. - frag_color.a) + frag_color * frag_color.a;
     }
 
+    //TEMP DIAG: skirt marker (magenta 255,0,255) must be visible on all surfaces including untinted stone
+    if (fs_in_color.r > 0.9 && fs_in_color.g < 0.1 && fs_in_color.b > 0.9) {
+        color_out = vec4(1.0, 0.0, 1.0, 1.0);
+    }
+
     return color_out;
 }

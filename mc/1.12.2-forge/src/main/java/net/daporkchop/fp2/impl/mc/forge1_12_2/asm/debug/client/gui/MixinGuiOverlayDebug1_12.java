@@ -20,8 +20,12 @@
 package net.daporkchop.fp2.impl.mc.forge1_12_2.asm.debug.client.gui;
 
 import net.daporkchop.fp2.core.debug.FP2Debug;
+import net.daporkchop.fp2.core.engine.client.bake.SkirtDiag; //TEMP DIAG
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Gui;
 import net.minecraft.client.gui.GuiOverlayDebug;
+import net.minecraft.entity.Entity;
+import net.minecraft.util.math.Vec3d;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
@@ -40,6 +44,12 @@ public abstract class MixinGuiOverlayDebug1_12 extends Gui {
             at = @At("RETURN"),
             require = 2)
     private void fp2_getDebugInfoRight_injectFP2DebugInfo(CallbackInfoReturnable<List<String>> ci) {
+        Minecraft mc = Minecraft.getMinecraft();
+        if (mc != null && mc.getRenderViewEntity() != null) {
+            Entity e = mc.getRenderViewEntity();
+            Vec3d look = e.getLookVec();
+            SkirtDiag.updateCamera(e.posX, e.posY + e.getEyeHeight(), e.posZ, look.x, look.y, look.z); //TEMP DIAG
+        }
         ci.getReturnValue().addAll(FP2Debug.clientDebugInfo(fp2()));
     }
 }
