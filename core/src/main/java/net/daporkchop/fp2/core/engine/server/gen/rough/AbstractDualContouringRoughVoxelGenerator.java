@@ -40,6 +40,11 @@ import static net.daporkchop.lib.common.util.PValidation.*;
  * @author DaPorkchop_
  */
 public abstract class AbstractDualContouringRoughVoxelGenerator<PARAM> extends AbstractRoughVoxelGenerator {
+    public static final int BOUNDARY_NEG_X = 1;
+    public static final int BOUNDARY_POS_X = 2;
+    public static final int BOUNDARY_NEG_Z = 4;
+    public static final int BOUNDARY_POS_Z = 8;
+
     protected final Cached<double[][]> densityMapCache = Cached.threadLocal(() -> new double[2][cb(CACHE_SIZE)], ReferenceStrength.WEAK);
 
     public AbstractDualContouringRoughVoxelGenerator(@NonNull IFarLevelServer world, @NonNull IFarTileProvider provider) {
@@ -69,6 +74,10 @@ public abstract class AbstractDualContouringRoughVoxelGenerator<PARAM> extends A
     }
 
     protected void dualContour(int baseX, int baseY, int baseZ, int level, Tile tile, double[][] densityMap, PARAM param) {
+        this.dualContour(baseX, baseY, baseZ, level, tile, densityMap, 0, param);
+    }
+
+    protected void dualContour(int baseX, int baseY, int baseZ, int level, Tile tile, double[][] densityMap, int exactBoundaries, PARAM param) {
         QefSolver qef = new QefSolver();
         TileData data = new TileData();
         Vector3d vec = new Vector3d();
@@ -189,6 +198,15 @@ public abstract class AbstractDualContouringRoughVoxelGenerator<PARAM> extends A
                     data.x = clamp(floorI(vec.x * POS_ONE), 0, POS_ONE);
                     data.y = clamp(floorI(vec.y * POS_ONE), 0, POS_ONE);
                     data.z = clamp(floorI(vec.z * POS_ONE), 0, POS_ONE);
+
+                    if (((exactBoundaries & BOUNDARY_NEG_X) != 0 && dx == 0)
+                            || ((exactBoundaries & BOUNDARY_POS_X) != 0 && dx == T_VOXELS - 1)
+                            || ((exactBoundaries & BOUNDARY_NEG_Z) != 0 && dz == 0)
+                            || ((exactBoundaries & BOUNDARY_POS_Z) != 0 && dz == T_VOXELS - 1)) {
+                        data.x = 0;
+                        data.y = 0;
+                        data.z = 0;
+                    }
 
                     //normalize normal vector
                     double nFactor = 1.0d / sqrt(totalNx * totalNx + totalNy * totalNy + totalNz * totalNz);

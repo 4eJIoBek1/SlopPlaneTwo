@@ -33,6 +33,7 @@ import net.minecraft.world.gen.NoiseGeneratorPerlin;
 
 import java.util.Random;
 
+import static net.daporkchop.fp2.core.engine.server.gen.AbstractVoxelGenerator.CACHE_SIZE;
 import static net.daporkchop.fp2.impl.mc.forge1_12_2.compat.vanilla.VanillaTerrainGenConstants1_12.*;
 import static net.daporkchop.lib.common.math.PMath.*;
 import static net.daporkchop.lib.common.util.PValidation.*;
@@ -92,6 +93,21 @@ public class VanillaRoughContext1_12 {
     protected int baseX;
     protected int baseZ;
     protected int level = -1;
+    public int tileBaseX;
+    public int tileBaseY;
+    public int tileBaseZ;
+
+    public final int[] boundaryStates = new int[CACHE_SIZE * CACHE_SIZE * CACHE_SIZE];
+    public final int[] boundaryBiomes = new int[CACHE_SIZE * CACHE_SIZE * CACHE_SIZE];
+    public final byte[] boundaryLights = new byte[CACHE_SIZE * CACHE_SIZE * CACHE_SIZE];
+
+    public final int[] tempStates = new int[CACHE_SIZE * 16];
+    public final int[] tempBiomes = new int[CACHE_SIZE * 16];
+    public final byte[] tempLights = new byte[CACHE_SIZE * 16];
+
+    public void resetBoundary() {
+        java.util.Arrays.fill(this.boundaryStates, 0);
+    }
 
     public VanillaRoughContext1_12(@NonNull FGameRegistry registry, @NonNull WorldServer world, int size) {
         this.size = notNegative(size, "size");
