@@ -97,77 +97,34 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
         //blocks
         ctx.get3d(densityMap[1], baseY + (CACHE_MIN << level));
 
-        int exactBoundaries = 0;
         if (level == 0) {
-            exactBoundaries = this.blendExactBoundaries(baseX, baseY, baseZ, densityMap, ctx);
+            this.blendExactBoundaries(baseX, baseY, baseZ, densityMap, ctx);
         }
 
         //actually create the mesh (using dual contouring)
-        this.dualContour(baseX, baseY, baseZ, level, tile, densityMap, exactBoundaries, ctx);
+        this.dualContour(baseX, baseY, baseZ, level, tile, densityMap, ctx);
     }
 
-    protected int blendExactBoundaries(int baseX, int baseY, int baseZ, double[][] densityMap, VanillaRoughContext1_12 ctx) {
-        int exactBoundaries = 0;
+    protected void blendExactBoundaries(int baseX, int baseY, int baseZ, double[][] densityMap, VanillaRoughContext1_12 ctx) {
         try (FBlockLevel exactWorld = this.world().exactBlockLevelHolder().worldFor(ExactFBlockLevelHolder.AllowGenerationRequirement.DONT_CARE)) {
             int stoneState = this.registry().state2id(Blocks.STONE.getDefaultState());
 
             // Boundary -X
             if (exactWorld.containsAnyData(baseX - 16, baseY, baseZ, baseX, baseY + 16, baseZ + 16)) {
                 try {
-                    exactWorld.multiGetDense(baseX - 1, baseY + CACHE_MIN, baseZ, 1, CACHE_SIZE, 16, ctx.tempStates, 0, ctx.tempBiomes, 0, ctx.tempLights, 0);
-                    exactBoundaries |= BOUNDARY_NEG_X;
+                    exactWorld.multiGetDense(baseX - 1, baseY + CACHE_MIN, baseZ, 1, CACHE_SIZE, 16, ctx.tempStates, 0, null, 0, null, 0);
                     for (int dy = 0; dy < CACHE_SIZE; dy++) {
                         int worldY = baseY + CACHE_MIN + dy;
                         int targetY = CACHE_MIN + dy;
                         for (int dz = 0; dz < 16; dz++) {
                             int queryIdx = dy * 16 + dz;
-                            int state, biome;
-                            byte light;
-                            if (worldY < 0) {
-                                state = stoneState;
-                                biome = ctx.getBiome(baseX - 1, baseZ + dz);
-                                light = 0;
-                            } else if (worldY >= 256) {
-                                state = 0;
-                                biome = ctx.getBiome(baseX - 1, baseZ + dz);
-                                light = (byte) 0xFF;
-                            } else {
-                                state = ctx.tempStates[queryIdx];
-                                biome = ctx.tempBiomes[queryIdx];
-                                light = ctx.tempLights[queryIdx];
-                            }
-                            double d0, d1;
-                            int type = state == 0 ? BLOCK_TYPE_INVISIBLE : this.extendedStateRegistryData().type(state);
-                            if (type == BLOCK_TYPE_OPAQUE) {
-                                d1 = 1.0d;
-                                d0 = -1.0d;
-                            } else if (type == BLOCK_TYPE_TRANSPARENT) {
-                                IBlockState bs = (IBlockState) this.registry().id2state(state);
-                                if (bs.getMaterial().isLiquid()) {
-                                    d0 = 1.0d;
-                                    d1 = -1.0d;
-                                } else {
-                                    d1 = 1.0d;
-                                    d0 = -1.0d;
-                                }
-                            } else {
-                                d0 = -1.0d;
-                                d1 = -1.0d;
-                            }
-                            for (int x = -1; x <= 0; x++) {
-                                int idx = cacheIndex(x, targetY, dz);
-                                densityMap[0][idx] = d0;
-                                densityMap[1][idx] = d1;
-                                if (state != 0) {
-                                    ctx.boundaryStates[idx] = state;
-                                    ctx.boundaryBiomes[idx] = biome;
-                                    ctx.boundaryLights[idx] = light;
-                                }
-                            }
+                            int state = (worldY < 0) ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[queryIdx]);
+                            this.setBoundaryDensity(0, targetY, dz, state, densityMap, ctx);
+                            this.setBoundaryDensity(-1, targetY, dz, state, densityMap, ctx);
                         }
-                        for (int x = -1; x <= 0; x++) {
-                            copyHaloZ(x, targetY, densityMap, ctx);
-                        }
+                        int state16 = this.queryBoundaryStateSafe(exactWorld, baseX - 1, worldY, baseZ + 16, worldY < 0 ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[dy * 16 + 15]), stoneState);
+                        this.setBoundaryDensity(0, targetY, 16, state16, densityMap, ctx);
+                        this.setBoundaryDensity(-1, targetY, 16, state16, densityMap, ctx);
                     }
                 } catch (GenerationNotAllowedException ignored) {
                 }
@@ -176,56 +133,17 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
             // Boundary +X
             if (exactWorld.containsAnyData(baseX + 16, baseY, baseZ, baseX + 32, baseY + 16, baseZ + 16)) {
                 try {
-                    exactWorld.multiGetDense(baseX + 16, baseY + CACHE_MIN, baseZ, 1, CACHE_SIZE, 16, ctx.tempStates, 0, ctx.tempBiomes, 0, ctx.tempLights, 0);
-                    exactBoundaries |= BOUNDARY_POS_X;
+                    exactWorld.multiGetDense(baseX + 16, baseY + CACHE_MIN, baseZ, 1, CACHE_SIZE, 16, ctx.tempStates, 0, null, 0, null, 0);
                     for (int dy = 0; dy < CACHE_SIZE; dy++) {
                         int worldY = baseY + CACHE_MIN + dy;
                         int targetY = CACHE_MIN + dy;
                         for (int dz = 0; dz < 16; dz++) {
                             int queryIdx = dy * 16 + dz;
-                            int state, biome;
-                            byte light;
-                            if (worldY < 0) {
-                                state = stoneState;
-                                biome = ctx.getBiome(baseX + 16, baseZ + dz);
-                                light = 0;
-                            } else if (worldY >= 256) {
-                                state = 0;
-                                biome = ctx.getBiome(baseX + 16, baseZ + dz);
-                                light = (byte) 0xFF;
-                            } else {
-                                state = ctx.tempStates[queryIdx];
-                                biome = ctx.tempBiomes[queryIdx];
-                                light = ctx.tempLights[queryIdx];
-                            }
-                            double d0, d1;
-                            int type = state == 0 ? BLOCK_TYPE_INVISIBLE : this.extendedStateRegistryData().type(state);
-                            if (type == BLOCK_TYPE_OPAQUE) {
-                                d1 = 1.0d;
-                                d0 = -1.0d;
-                            } else if (type == BLOCK_TYPE_TRANSPARENT) {
-                                IBlockState bs = (IBlockState) this.registry().id2state(state);
-                                if (bs.getMaterial().isLiquid()) {
-                                    d0 = 1.0d;
-                                    d1 = -1.0d;
-                                } else {
-                                    d1 = 1.0d;
-                                    d0 = -1.0d;
-                                }
-                            } else {
-                                d0 = -1.0d;
-                                d1 = -1.0d;
-                            }
-                            int idx = cacheIndex(16, targetY, dz);
-                            densityMap[0][idx] = d0;
-                            densityMap[1][idx] = d1;
-                            if (state != 0) {
-                                ctx.boundaryStates[idx] = state;
-                                ctx.boundaryBiomes[idx] = biome;
-                                ctx.boundaryLights[idx] = light;
-                            }
+                            int state = (worldY < 0) ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[queryIdx]);
+                            this.setBoundaryDensity(16, targetY, dz, state, densityMap, ctx);
                         }
-                        copyHaloZ(16, targetY, densityMap, ctx);
+                        int state16 = this.queryBoundaryStateSafe(exactWorld, baseX + 16, worldY, baseZ + 16, worldY < 0 ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[dy * 16 + 15]), stoneState);
+                        this.setBoundaryDensity(16, targetY, 16, state16, densityMap, ctx);
                     }
                 } catch (GenerationNotAllowedException ignored) {
                 }
@@ -234,63 +152,23 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
             // Boundary -Z
             if (exactWorld.containsAnyData(baseX, baseY, baseZ - 16, baseX + 16, baseY + 16, baseZ)) {
                 try {
-                    exactWorld.multiGetDense(baseX, baseY + CACHE_MIN, baseZ - 1, 16, CACHE_SIZE, 1, ctx.tempStates, 0, ctx.tempBiomes, 0, ctx.tempLights, 0);
-                    exactBoundaries |= BOUNDARY_NEG_Z;
+                    exactWorld.multiGetDense(baseX, baseY + CACHE_MIN, baseZ - 1, 16, CACHE_SIZE, 1, ctx.tempStates, 0, null, 0, null, 0);
                     for (int dx = 0; dx < 16; dx++) {
                         for (int dy = 0; dy < CACHE_SIZE; dy++) {
                             int queryIdx = dx * CACHE_SIZE + dy;
                             int worldY = baseY + CACHE_MIN + dy;
                             int targetY = CACHE_MIN + dy;
-                            int state, biome;
-                            byte light;
-                            if (worldY < 0) {
-                                state = stoneState;
-                                biome = ctx.getBiome(baseX + dx, baseZ - 1);
-                                light = 0;
-                            } else if (worldY >= 256) {
-                                state = 0;
-                                biome = ctx.getBiome(baseX + dx, baseZ - 1);
-                                light = (byte) 0xFF;
-                            } else {
-                                state = ctx.tempStates[queryIdx];
-                                biome = ctx.tempBiomes[queryIdx];
-                                light = ctx.tempLights[queryIdx];
-                            }
-                            double d0, d1;
-                            int type = state == 0 ? BLOCK_TYPE_INVISIBLE : this.extendedStateRegistryData().type(state);
-                            if (type == BLOCK_TYPE_OPAQUE) {
-                                d1 = 1.0d;
-                                d0 = -1.0d;
-                            } else if (type == BLOCK_TYPE_TRANSPARENT) {
-                                IBlockState bs = (IBlockState) this.registry().id2state(state);
-                                if (bs.getMaterial().isLiquid()) {
-                                    d0 = 1.0d;
-                                    d1 = -1.0d;
-                                } else {
-                                    d1 = 1.0d;
-                                    d0 = -1.0d;
-                                }
-                            } else {
-                                d0 = -1.0d;
-                                d1 = -1.0d;
-                            }
-                            for (int z = -1; z <= 0; z++) {
-                                int idx = cacheIndex(dx, targetY, z);
-                                densityMap[0][idx] = d0;
-                                densityMap[1][idx] = d1;
-                                if (state != 0) {
-                                    ctx.boundaryStates[idx] = state;
-                                    ctx.boundaryBiomes[idx] = biome;
-                                    ctx.boundaryLights[idx] = light;
-                                }
-                            }
+                            int state = (worldY < 0) ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[queryIdx]);
+                            this.setBoundaryDensity(dx, targetY, 0, state, densityMap, ctx);
+                            this.setBoundaryDensity(dx, targetY, -1, state, densityMap, ctx);
                         }
                     }
                     for (int dy = 0; dy < CACHE_SIZE; dy++) {
+                        int worldY = baseY + CACHE_MIN + dy;
                         int targetY = CACHE_MIN + dy;
-                        for (int z = -1; z <= 0; z++) {
-                            copyHaloX(z, targetY, densityMap, ctx);
-                        }
+                        int state16 = this.queryBoundaryStateSafe(exactWorld, baseX + 16, worldY, baseZ - 1, worldY < 0 ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[15 * CACHE_SIZE + dy]), stoneState);
+                        this.setBoundaryDensity(16, targetY, 0, state16, densityMap, ctx);
+                        this.setBoundaryDensity(16, targetY, -1, state16, densityMap, ctx);
                     }
                 } catch (GenerationNotAllowedException ignored) {
                 }
@@ -299,101 +177,63 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
             // Boundary +Z
             if (exactWorld.containsAnyData(baseX, baseY, baseZ + 16, baseX + 16, baseY + 16, baseZ + 32)) {
                 try {
-                    exactWorld.multiGetDense(baseX, baseY + CACHE_MIN, baseZ + 16, 16, CACHE_SIZE, 1, ctx.tempStates, 0, ctx.tempBiomes, 0, ctx.tempLights, 0);
-                    exactBoundaries |= BOUNDARY_POS_Z;
+                    exactWorld.multiGetDense(baseX, baseY + CACHE_MIN, baseZ + 16, 16, CACHE_SIZE, 1, ctx.tempStates, 0, null, 0, null, 0);
                     for (int dx = 0; dx < 16; dx++) {
                         for (int dy = 0; dy < CACHE_SIZE; dy++) {
                             int queryIdx = dx * CACHE_SIZE + dy;
                             int worldY = baseY + CACHE_MIN + dy;
                             int targetY = CACHE_MIN + dy;
-                            int state, biome;
-                            byte light;
-                            if (worldY < 0) {
-                                state = stoneState;
-                                biome = ctx.getBiome(baseX + dx, baseZ + 16);
-                                light = 0;
-                            } else if (worldY >= 256) {
-                                state = 0;
-                                biome = ctx.getBiome(baseX + dx, baseZ + 16);
-                                light = (byte) 0xFF;
-                            } else {
-                                state = ctx.tempStates[queryIdx];
-                                biome = ctx.tempBiomes[queryIdx];
-                                light = ctx.tempLights[queryIdx];
-                            }
-                            double d0, d1;
-                            int type = state == 0 ? BLOCK_TYPE_INVISIBLE : this.extendedStateRegistryData().type(state);
-                            if (type == BLOCK_TYPE_OPAQUE) {
-                                d1 = 1.0d;
-                                d0 = -1.0d;
-                            } else if (type == BLOCK_TYPE_TRANSPARENT) {
-                                IBlockState bs = (IBlockState) this.registry().id2state(state);
-                                if (bs.getMaterial().isLiquid()) {
-                                    d0 = 1.0d;
-                                    d1 = -1.0d;
-                                } else {
-                                    d1 = 1.0d;
-                                    d0 = -1.0d;
-                                }
-                            } else {
-                                d0 = -1.0d;
-                                d1 = -1.0d;
-                            }
-                            int idx = cacheIndex(dx, targetY, 16);
-                            densityMap[0][idx] = d0;
-                            densityMap[1][idx] = d1;
-                            if (state != 0) {
-                                ctx.boundaryStates[idx] = state;
-                                ctx.boundaryBiomes[idx] = biome;
-                                ctx.boundaryLights[idx] = light;
-                            }
+                            int state = (worldY < 0) ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[queryIdx]);
+                            this.setBoundaryDensity(dx, targetY, 16, state, densityMap, ctx);
                         }
                     }
                     for (int dy = 0; dy < CACHE_SIZE; dy++) {
+                        int worldY = baseY + CACHE_MIN + dy;
                         int targetY = CACHE_MIN + dy;
-                        copyHaloX(16, targetY, densityMap, ctx);
+                        int state16 = this.queryBoundaryStateSafe(exactWorld, baseX + 16, worldY, baseZ + 16, worldY < 0 ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[15 * CACHE_SIZE + dy]), stoneState);
+                        this.setBoundaryDensity(16, targetY, 16, state16, densityMap, ctx);
                     }
                 } catch (GenerationNotAllowedException ignored) {
                 }
             }
         }
-        return exactBoundaries;
     }
 
-    private static void copyHaloZ(int x, int targetY, double[][] densityMap, VanillaRoughContext1_12 ctx) {
-        int idx0 = cacheIndex(x, targetY, 0);
-        int idxNeg1 = cacheIndex(x, targetY, -1);
-        densityMap[0][idxNeg1] = densityMap[0][idx0];
-        densityMap[1][idxNeg1] = densityMap[1][idx0];
-        ctx.boundaryStates[idxNeg1] = ctx.boundaryStates[idx0];
-        ctx.boundaryBiomes[idxNeg1] = ctx.boundaryBiomes[idx0];
-        ctx.boundaryLights[idxNeg1] = ctx.boundaryLights[idx0];
-
-        int idx15 = cacheIndex(x, targetY, 15);
-        int idx16 = cacheIndex(x, targetY, 16);
-        densityMap[0][idx16] = densityMap[0][idx15];
-        densityMap[1][idx16] = densityMap[1][idx15];
-        ctx.boundaryStates[idx16] = ctx.boundaryStates[idx15];
-        ctx.boundaryBiomes[idx16] = ctx.boundaryBiomes[idx15];
-        ctx.boundaryLights[idx16] = ctx.boundaryLights[idx15];
+    private int queryBoundaryStateSafe(FBlockLevel exactWorld, int x, int y, int z, int fallbackState, int stoneState) {
+        if (y < 0) {
+            return stoneState;
+        } else if (y >= 256) {
+            return 0;
+        }
+        try {
+            return exactWorld.getState(x, y, z);
+        } catch (Exception ignored) {
+            return fallbackState;
+        }
     }
 
-    private static void copyHaloX(int z, int targetY, double[][] densityMap, VanillaRoughContext1_12 ctx) {
-        int idx0 = cacheIndex(0, targetY, z);
-        int idxNeg1 = cacheIndex(-1, targetY, z);
-        densityMap[0][idxNeg1] = densityMap[0][idx0];
-        densityMap[1][idxNeg1] = densityMap[1][idx0];
-        ctx.boundaryStates[idxNeg1] = ctx.boundaryStates[idx0];
-        ctx.boundaryBiomes[idxNeg1] = ctx.boundaryBiomes[idx0];
-        ctx.boundaryLights[idxNeg1] = ctx.boundaryLights[idx0];
-
-        int idx15 = cacheIndex(15, targetY, z);
-        int idx16 = cacheIndex(16, targetY, z);
-        densityMap[0][idx16] = densityMap[0][idx15];
-        densityMap[1][idx16] = densityMap[1][idx15];
-        ctx.boundaryStates[idx16] = ctx.boundaryStates[idx15];
-        ctx.boundaryBiomes[idx16] = ctx.boundaryBiomes[idx15];
-        ctx.boundaryLights[idx16] = ctx.boundaryLights[idx15];
+    private void setBoundaryDensity(int x, int y, int z, int state, double[][] densityMap, VanillaRoughContext1_12 ctx) {
+        if (x < CACHE_MIN || x >= CACHE_MAX || y < CACHE_MIN || y >= CACHE_MAX || z < CACHE_MIN || z >= CACHE_MAX) {
+            return;
+        }
+        double d0, d1;
+        IBlockState bs = state == 0 ? null : (IBlockState) this.registry().id2state(state);
+        if (bs != null && bs.isOpaqueCube()) {
+            d1 = 1.0d;
+            d0 = -1.0d;
+            if (x >= 0 && x < CACHE_SIZE && y >= 0 && y < CACHE_SIZE && z >= 0 && z < CACHE_SIZE) {
+                ctx.boundaryStates[cacheIndex(x, y, z)] = state;
+            }
+        } else if (bs != null && bs.getMaterial().isLiquid()) {
+            d0 = 1.0d;
+            d1 = -1.0d;
+        } else {
+            d0 = -1.0d;
+            d1 = -1.0d;
+        }
+        int idx = cacheIndex(x, y, z);
+        densityMap[0][idx] = d0;
+        densityMap[1][idx] = d1;
     }
 
     @Override
@@ -406,20 +246,13 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
             int dx = blockX - ctx.tileBaseX;
             int dy = blockY - ctx.tileBaseY;
             int dz = blockZ - ctx.tileBaseZ;
-            if (dx >= CACHE_MIN && dx < CACHE_MAX && dy >= CACHE_MIN && dy < CACHE_MAX && dz >= CACHE_MIN && dz < CACHE_MAX) {
-                int bState = ctx.boundaryStates[cacheIndex(dx, dy, dz)];
+            if (dx >= 0 && dx < 16 && dy >= 0 && dy < 16 && dz >= 0 && dz < 16) {
+                int checkX = (dx == 15 && ctx.boundaryStates[cacheIndex(16, dy, dz)] != 0) ? 16 : dx;
+                int checkZ = (dz == 15 && ctx.boundaryStates[cacheIndex(checkX, dy, 16)] != 0) ? 16 : dz;
+                int bState = ctx.boundaryStates[cacheIndex(checkX, dy, checkZ)];
                 if (bState != 0) {
-                    return bState;
-                }
-                if (dx == 15) {
-                    bState = ctx.boundaryStates[cacheIndex(16, dy, dz)];
-                    if (bState != 0) {
-                        return bState;
-                    }
-                }
-                if (dz == 15) {
-                    bState = ctx.boundaryStates[cacheIndex(dx, dy, 16)];
-                    if (bState != 0) {
+                    IBlockState bs = (IBlockState) this.registry().id2state(bState);
+                    if (bs != null && bs.isOpaqueCube()) {
                         return bState;
                     }
                 }
@@ -445,32 +278,6 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
 
     @Override
     protected void populateVoxelBlockData(int blockX, int blockY, int blockZ, int level, double nx, double ny, double nz, TileData data, VanillaRoughContext1_12 ctx) {
-        if (level == 0) {
-            int dx = blockX - ctx.tileBaseX;
-            int dy = blockY - ctx.tileBaseY;
-            int dz = blockZ - ctx.tileBaseZ;
-            if (dx >= CACHE_MIN && dx < CACHE_MAX && dy >= CACHE_MIN && dy < CACHE_MAX && dz >= CACHE_MIN && dz < CACHE_MAX) {
-                int idx = cacheIndex(dx, dy, dz);
-                if (ctx.boundaryStates[idx] != 0) {
-                    data.biome = ctx.boundaryBiomes[idx];
-                    data.light = ctx.boundaryLights[idx];
-                    return;
-                }
-                if (dx == 15 && ctx.boundaryStates[cacheIndex(16, dy, dz)] != 0) {
-                    int idx16 = cacheIndex(16, dy, dz);
-                    data.biome = ctx.boundaryBiomes[idx16];
-                    data.light = ctx.boundaryLights[idx16];
-                    return;
-                }
-                if (dz == 15 && ctx.boundaryStates[cacheIndex(dx, dy, 16)] != 0) {
-                    int idx16 = cacheIndex(dx, dy, 16);
-                    data.biome = ctx.boundaryBiomes[idx16];
-                    data.light = ctx.boundaryLights[idx16];
-                    return;
-                }
-            }
-        }
-
         blockY++;
 
         int seaLevel = this.seaLevel() >> level << level; //truncate lower bits in order to scale the sea level to the current zoom level

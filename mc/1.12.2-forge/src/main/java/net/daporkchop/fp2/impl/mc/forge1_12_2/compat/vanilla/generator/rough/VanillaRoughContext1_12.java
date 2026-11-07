@@ -98,12 +98,7 @@ public class VanillaRoughContext1_12 {
     public int tileBaseZ;
 
     public final int[] boundaryStates = new int[CACHE_SIZE * CACHE_SIZE * CACHE_SIZE];
-    public final int[] boundaryBiomes = new int[CACHE_SIZE * CACHE_SIZE * CACHE_SIZE];
-    public final byte[] boundaryLights = new byte[CACHE_SIZE * CACHE_SIZE * CACHE_SIZE];
-
     public final int[] tempStates = new int[CACHE_SIZE * 16];
-    public final int[] tempBiomes = new int[CACHE_SIZE * 16];
-    public final byte[] tempLights = new byte[CACHE_SIZE * 16];
 
     public void resetBoundary() {
         java.util.Arrays.fill(this.boundaryStates, 0);
