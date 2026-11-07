@@ -315,82 +315,90 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
      * The wall belongs to the tile on the negative side of the border (the {@code +X}/{@code +Z} sides only), so that every seam is drawn exactly once instead
      *  of twice with two co-planar walls fighting for the same depth.
      */
-    /**
-     * Checks whether a tile is blocky (has no non-zero fractional vertex offsets).
-     * Exact vanilla chunks and flat generators produce blocky tiles with all-zero offsets.
-     */
-    protected boolean isBlocky(Tile tile, TileData probe) {
+    protected static final int TYPE_NONE = 0;
+    protected static final int TYPE_BLOCKY = 1;
+    protected static final int TYPE_SMOOTH = 2;
+
+    protected int tileType(Tile tile, TileData probe) {
         if (tile == null || tile.count() == 0) {
-            return false;
+            return TYPE_NONE;
         }
         if (this.forceBlockyMesh) {
-            return true;
+            return TYPE_BLOCKY;
         }
         int count = tile.count();
         for (int i = 0; i < count; i++) {
             tile.getOnlyPos(i, probe);
             if (probe.x != 0 || probe.y != 0 || probe.z != 0) {
-                return false;
+                return TYPE_SMOOTH;
             }
         }
-        return true;
+        return TYPE_BLOCKY;
+    }
+
+    protected int stackType(Tile t0, Tile t1, TileData probe) {
+        int type0 = this.tileType(t0, probe);
+        if (type0 != TYPE_NONE) {
+            return type0;
+        }
+        return this.tileType(t1, probe);
+    }
+
+    protected boolean isBlocky(Tile tile, TileData probe) {
+        return this.tileType(tile, probe) == TYPE_BLOCKY;
     }
 
     protected void writeSkirt(Tile[] srcs, Tile src, GapList gaps, int blockX, int blockY, int blockZ, int level, AttributeWriter<VoxelLocalAttributes> verts, IndexWriter[] indices) {
-        if (src == null || src.count() == 0) {
-            return;
-        }
-
-        Tile neighbourX = srcs[4];
-        Tile neighbourZ = srcs[1];
-
-        if (neighbourX == null && neighbourZ == null) {
-            return;
-        }
-
         final TileData probe = new TileData();
-        boolean srcBlocky = isBlocky(src, probe);
-
-        if (neighbourX != null) {
-            Tile tileToCheck = neighbourX.count() > 0 ? neighbourX : (srcs[6] != null && srcs[6].count() > 0 ? srcs[6] : null);
-            if (tileToCheck != null) {
-                boolean neighbourXBlocky = isBlocky(tileToCheck, probe);
-                if (srcBlocky != neighbourXBlocky) {  // ONLY at rough↔scaler boundary
-                    this.buildSeamAxis(true, srcs, gaps, blockX, blockY, blockZ, level, verts, indices);
-                }
-            }
+        int ourType = this.stackType(srcs[0], srcs[2], probe);
+        if (ourType == TYPE_NONE) {
+            return;
         }
-        if (neighbourZ != null) {
-            Tile tileToCheck = neighbourZ.count() > 0 ? neighbourZ : (srcs[3] != null && srcs[3].count() > 0 ? srcs[3] : null);
-            if (tileToCheck != null) {
-                boolean neighbourZBlocky = isBlocky(tileToCheck, probe);
-                if (srcBlocky != neighbourZBlocky) {  // ONLY at rough↔scaler boundary
-                    this.buildSeamAxis(false, srcs, gaps, blockX, blockY, blockZ, level, verts, indices);
-                }
-            }
+
+        int theirTypeX = this.stackType(srcs[4], srcs[6], probe);
+        if (theirTypeX != TYPE_NONE && ourType != theirTypeX) {
+            this.buildSeamAxis(true, ourType, theirTypeX, srcs, gaps, blockX, blockY, blockZ, level, verts, indices);
+        }
+
+        int theirTypeZ = this.stackType(srcs[1], srcs[3], probe);
+        if (theirTypeZ != TYPE_NONE && ourType != theirTypeZ) {
+            this.buildSeamAxis(false, ourType, theirTypeZ, srcs, gaps, blockX, blockY, blockZ, level, verts, indices);
         }
     }
 
-    protected void buildSeamAxis(boolean xAxis, Tile[] srcs, GapList gaps, int blockX, int blockY, int blockZ, int level, AttributeWriter<VoxelLocalAttributes> verts, IndexWriter[] indices) {
-        Tile src = srcs[0];
-        Tile neighbour = xAxis ? srcs[4] : srcs[1];
-        if (src == null || neighbour == null) {
-            return;
-        }
+    protected void buildSeamAxis(boolean xAxis, int ourType, int theirType, Tile[] srcs, GapList gaps, int blockX, int blockY, int blockZ, int level, AttributeWriter<VoxelLocalAttributes> verts, IndexWriter[] indices) {
+        Tile our0 = srcs[0];
+        Tile our1 = srcs[2];
+        Tile their0 = xAxis ? srcs[4] : srcs[1];
+        Tile their1 = xAxis ? srcs[6] : srcs[3];
 
+        boolean ourIsBlocky = (ourType == TYPE_BLOCKY);
         final int fractMask = this.forceBlockyMesh ? 0 : -1;
+        final int tilePlaneTop = T_VOXELS << POS_FRACT_SHIFT;
+
         final TileData ours = new TileData();
         final TileData theirs = new TileData();
 
         final int[] rawOur = new int[T_VOXELS];
         final int[] rawTheir = new int[T_VOXELS];
+        final int[] clampedOur = new int[T_VOXELS];
+        final int[] clampedTheir = new int[T_VOXELS];
         final int[] ourStates = new int[T_VOXELS];
         final int[] theirStates = new int[T_VOXELS];
         final byte[] ourLights = new byte[T_VOXELS];
         final byte[] theirLights = new byte[T_VOXELS];
 
-        int knownOurCount = 0;
-        int knownTheirCount = 0;
+        final boolean[] validCol = new boolean[T_VOXELS];
+        final int[] bY = new int[T_VOXELS];
+        final int[] smoothCol = new int[T_VOXELS];
+        final int[] smoothCornerY = new int[T_VOXELS + 1];
+
+        final int[] seamState = new int[T_VOXELS];
+        final byte[] seamLight = new byte[T_VOXELS];
+        final int[] colLow = new int[T_VOXELS];
+        final int[] colHigh = new int[T_VOXELS];
+
+        boolean anySeam = false;
 
         for (int perp = 0; perp < T_VOXELS; perp++) {
             int ourColX = xAxis ? (T_VOXELS - 1) : perp;
@@ -399,70 +407,64 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
             int theirColZ = xAxis ? perp : 0;
 
             ours.reset();
-            int ourY = this.findSurfaceInColumn(src, ourColX, ourColZ, -1, -1, ours);
+            int ourY = this.findColumnGroundSurface(our0, our1, ourColX, ourColZ, ours);
             if (ourY >= 0) {
-                rawOur[perp] = (ourY << POS_FRACT_SHIFT) + (ours.y & fractMask);
+                int fract = ourIsBlocky ? 0 : (ours.y & fractMask);
+                int rawVal = (ourY << POS_FRACT_SHIFT) + fract;
+                rawOur[perp] = rawVal;
+                clampedOur[perp] = Math.max(0, Math.min(tilePlaneTop, rawVal));
                 ourStates[perp] = surfaceState(ours, 1);
                 ourLights[perp] = ours.light;
-                knownOurCount++;
             } else {
                 rawOur[perp] = -1;
+                clampedOur[perp] = 0;
+                ourStates[perp] = 0;
+                ourLights[perp] = 0;
             }
 
             theirs.reset();
-            int theirY = -1;
-            if (ourY >= 0) {
-                theirY = this.findSurfaceInColumn(neighbour, theirColX, theirColZ, ourY, -1, theirs);
-            } else {
-                theirY = this.findSurfaceInColumn(neighbour, theirColX, theirColZ, -1, -1, theirs);
-            }
-
+            int theirY = this.findColumnGroundSurface(their0, their1, theirColX, theirColZ, theirs);
             if (theirY >= 0) {
-                rawTheir[perp] = (theirY << POS_FRACT_SHIFT) + (theirs.y & fractMask);
+                int fract = (!ourIsBlocky) ? 0 : (theirs.y & fractMask);
+                int rawVal = (theirY << POS_FRACT_SHIFT) + fract;
+                rawTheir[perp] = rawVal;
+                clampedTheir[perp] = Math.max(0, Math.min(tilePlaneTop, rawVal));
                 theirStates[perp] = surfaceState(theirs, 1);
                 theirLights[perp] = theirs.light;
-                knownTheirCount++;
             } else {
                 rawTheir[perp] = -1;
+                clampedTheir[perp] = 0;
+                theirStates[perp] = 0;
+                theirLights[perp] = 0;
             }
-        }
 
-        // If either tile has no surface in any column, there is no surface-to-surface seam to connect
-        if (knownOurCount == 0 || knownTheirCount == 0) {
-            return;
-        }
+            // Determine if column is valid (Refinement 1)
+            if (ourY >= 0 && theirY >= 0) {
+                validCol[perp] = true;
+            } else if (ourY >= 0 && theirY < 0) {
+                if (clampedOur[perp] > 0) {
+                    validCol[perp] = true;
+                }
+            } else if (ourY < 0 && theirY >= 0) {
+                if (clampedTheir[perp] > 0) {
+                    validCol[perp] = true;
+                }
+            }
 
-        // Phase 2: Bridge missing surfaces by propagating along the seam
-        if (knownOurCount < T_VOXELS) {
-            fillMissingFromNearest(rawOur, ourStates, ourLights);
-        }
-        if (knownTheirCount < T_VOXELS) {
-            fillMissingFromNearest(rawTheir, theirStates, theirLights);
-        }
+            if (validCol[perp]) {
+                if (clampedOur[perp] != clampedTheir[perp]) {
+                    anySeam = true;
+                }
 
-        final int tilePlaneTop = T_VOXELS << POS_FRACT_SHIFT;
-        final boolean[] hasSeam = new boolean[T_VOXELS];
-        final int[] colLow = new int[T_VOXELS];
-        final int[] colHigh = new int[T_VOXELS];
-        final int[] seamState = new int[T_VOXELS];
-        final byte[] seamLight = new byte[T_VOXELS];
-        boolean anySeam = false;
-
-        for (int perp = 0; perp < T_VOXELS; perp++) {
-            int ourSurface = rawOur[perp];
-            int theirSurface = rawTheir[perp];
-
-            int low = Math.max(0, Math.min(ourSurface, theirSurface));
-            int high = Math.min(tilePlaneTop, Math.max(ourSurface, theirSurface));
-            colLow[perp] = low;
-            colHigh[perp] = high;
-            if (high > low) {
-                hasSeam[perp] = true;
-                boolean theirsHigher = theirSurface >= ourSurface;
+                // State & light selection (Refinement 3)
+                boolean theirsHigher = clampedTheir[perp] >= clampedOur[perp];
                 int sHigh = theirsHigher ? theirStates[perp] : ourStates[perp];
                 int sLow = theirsHigher ? ourStates[perp] : theirStates[perp];
+                byte lHigh = theirsHigher ? theirLights[perp] : ourLights[perp];
+                byte lLow = theirsHigher ? ourLights[perp] : theirLights[perp];
+
                 int state = sHigh;
-                if (this.levelRenderer.renderTypeForState(state) != RenderConstants.LAYER_SOLID
+                if (sLow != 0 && this.levelRenderer.renderTypeForState(state) != RenderConstants.LAYER_SOLID
                         && this.levelRenderer.renderTypeForState(sLow) == RenderConstants.LAYER_SOLID) {
                     state = sLow;
                 }
@@ -470,12 +472,20 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
                     state = sLow != 0 ? sLow : (sHigh != 0 ? sHigh : 1);
                 }
                 seamState[perp] = state;
-                byte light = theirsHigher ? theirLights[perp] : ourLights[perp];
-                seamLight[perp] = light != 0 ? light : (byte) ((15 << 4) | 15);
-                anySeam = true;
-            } else {
-                seamState[perp] = ourStates[perp] != 0 ? ourStates[perp] : (theirStates[perp] != 0 ? theirStates[perp] : 1);
-                seamLight[perp] = ourLights[perp] != 0 ? ourLights[perp] : theirLights[perp];
+
+                byte light = lHigh != 0 ? lHigh : lLow;
+                if (light == 0) {
+                    light = (byte) ((15 << 4) | 15);
+                }
+                seamLight[perp] = light;
+
+                if (ourIsBlocky) {
+                    bY[perp] = clampedOur[perp];
+                    smoothCol[perp] = clampedTheir[perp];
+                } else {
+                    bY[perp] = clampedTheir[perp];
+                    smoothCol[perp] = clampedOur[perp];
+                }
             }
         }
 
@@ -483,26 +493,19 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
             return;
         }
 
-        // Interpolate corner heights (17 corners for 16 columns) to ensure adjacent quads meet with zero gap
-        final int[] cornerLow = new int[T_VOXELS + 1];
-        final int[] cornerHigh = new int[T_VOXELS + 1];
-
+        // Interpolate smooth side corner heights (17 corners for 16 columns)
         for (int k = 0; k <= T_VOXELS; k++) {
-            boolean hasPrev = (k > 0) && hasSeam[k - 1];
-            boolean hasNext = (k < T_VOXELS) && hasSeam[k];
+            boolean hasPrev = (k > 0) && validCol[k - 1];
+            boolean hasNext = (k < T_VOXELS) && validCol[k];
 
             if (hasPrev && hasNext) {
-                cornerLow[k] = (colLow[k - 1] + colLow[k]) >> 1;
-                cornerHigh[k] = (colHigh[k - 1] + colHigh[k]) >> 1;
+                smoothCornerY[k] = (smoothCol[k - 1] + smoothCol[k]) >> 1;
             } else if (hasPrev) {
-                cornerLow[k] = colLow[k - 1];
-                cornerHigh[k] = colHigh[k - 1];
+                smoothCornerY[k] = smoothCol[k - 1];
             } else if (hasNext) {
-                cornerLow[k] = colLow[k];
-                cornerHigh[k] = colHigh[k];
+                smoothCornerY[k] = smoothCol[k];
             } else {
-                cornerLow[k] = 0;
-                cornerHigh[k] = 0;
+                smoothCornerY[k] = 0;
             }
         }
 
@@ -510,21 +513,21 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
         int wallsBuilt = 0;
 
         for (int dz = 0; dz < T_VOXELS; dz++) {
-            int p0 = dz << POS_FRACT_SHIFT;
-            int p1 = (dz + 1) << POS_FRACT_SHIFT;
-            int low0 = cornerLow[dz];
-            int high0 = cornerHigh[dz];
-            int low1 = cornerLow[dz + 1];
-            int high1 = cornerHigh[dz + 1];
-
-            if (high0 <= low0 && high1 <= low1) {
+            if (!validCol[dz]) {
                 continue;
             }
 
-            int top0 = Math.min(plane, high0 + 1);
-            int top1 = Math.min(plane, high1 + 1);
-            int bot0 = Math.max(0, low0 - 1);
-            int bot1 = Math.max(0, low1 - 1);
+            int b = bY[dz];
+            int s0 = smoothCornerY[dz];
+            int s1 = smoothCornerY[dz + 1];
+
+            // Flat column: skip quad (Refinement 1)
+            if (b == s0 && b == s1) {
+                continue;
+            }
+
+            int p0 = dz << POS_FRACT_SHIFT;
+            int p1 = (dz + 1) << POS_FRACT_SHIFT;
 
             int state = seamState[dz];
             if (state == 0) {
@@ -539,24 +542,26 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
             }
             byte light = seamLight[dz];
 
-            int v_BL, v_BR, v_TR, v_TL;
+            int v_B0, v_B1, v_S1, v_S0;
             if (xAxis) {
-                v_BL = this.appendSkirtVertex(light, state, plane, bot0, p0, blockX, blockY, blockZ, level, verts);
-                v_BR = this.appendSkirtVertex(light, state, plane, bot1, p1, blockX, blockY, blockZ, level, verts);
-                v_TR = this.appendSkirtVertex(light, state, plane, top1, p1, blockX, blockY, blockZ, level, verts);
-                v_TL = this.appendSkirtVertex(light, state, plane, top0, p0, blockX, blockY, blockZ, level, verts);
+                v_B0 = this.appendSkirtVertex(light, state, plane, b, p0, blockX, blockY, blockZ, level, verts);
+                v_B1 = this.appendSkirtVertex(light, state, plane, b, p1, blockX, blockY, blockZ, level, verts);
+                v_S1 = this.appendSkirtVertex(light, state, plane, s1, p1, blockX, blockY, blockZ, level, verts);
+                v_S0 = this.appendSkirtVertex(light, state, plane, s0, p0, blockX, blockY, blockZ, level, verts);
             } else {
-                v_BL = this.appendSkirtVertex(light, state, p0, bot0, plane, blockX, blockY, blockZ, level, verts);
-                v_BR = this.appendSkirtVertex(light, state, p1, bot1, plane, blockX, blockY, blockZ, level, verts);
-                v_TR = this.appendSkirtVertex(light, state, p1, top1, plane, blockX, blockY, blockZ, level, verts);
-                v_TL = this.appendSkirtVertex(light, state, p0, top0, plane, blockX, blockY, blockZ, level, verts);
+                v_B0 = this.appendSkirtVertex(light, state, p0, b, plane, blockX, blockY, blockZ, level, verts);
+                v_B1 = this.appendSkirtVertex(light, state, p1, b, plane, blockX, blockY, blockZ, level, verts);
+                v_S1 = this.appendSkirtVertex(light, state, p1, s1, plane, blockX, blockY, blockZ, level, verts);
+                v_S0 = this.appendSkirtVertex(light, state, p0, s0, plane, blockX, blockY, blockZ, level, verts);
             }
 
             IndexWriter buf = indices[this.levelRenderer.renderTypeForState(state)];
             // Emit double-sided quad (both orientations) to guarantee 100% visibility from any camera angle
-            this.appendQuad(buf, v_BL, v_BR, v_TL, v_TR);
-            this.appendQuad(buf, v_TR, v_BR, v_TL, v_BL);
+            this.appendQuad(buf, v_S1, v_B1, v_S0, v_B0);
+            this.appendQuad(buf, v_S1, v_S0, v_B1, v_B0);
 
+            colLow[dz] = Math.min(b, Math.min(s0, s1));
+            colHigh[dz] = Math.max(b, Math.max(s0, s1));
             wallsBuilt++;
             gaps.walls++;
         }
@@ -564,30 +569,100 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
         SkirtDiag.recordSeam(new TilePos(level, blockX >> (level + T_SHIFT), blockY >> (level + T_SHIFT), blockZ >> (level + T_SHIFT)), xAxis, wallsBuilt, colLow, colHigh); //TEMP DIAG
     }
 
-    private static void fillMissingFromNearest(int[] surfaces, int[] states, byte[] lights) {
-        for (int i = 0; i < T_VOXELS; i++) {
-            if (surfaces[i] < 0) {
-                int bestDist = Integer.MAX_VALUE;
-                int bestIdx = -1;
-                for (int j = 0; j < T_VOXELS; j++) {
-                    if (surfaces[j] >= 0) {
-                        int dist = Math.abs(i - j);
-                        if (dist < bestDist) {
-                            bestDist = dist;
-                            bestIdx = j;
-                        }
+    protected int findColumnGroundSurface(Tile tile0, Tile tile1, int colX, int colZ, TileData out) {
+        int surfaceY = -1;
+        TileData probe = new TileData();
+
+        // 1. Search top-down in upper tile (dy=1, height 16..31)
+        if (tile1 != null) {
+            int y1 = this.findSurfaceInColumn(tile1, colX, colZ, -1, -1, probe);
+            if (y1 >= 0) {
+                surfaceY = y1 + T_VOXELS;
+                copyTileData(probe, out);
+            }
+        }
+
+        // 2. If not found in upper tile, search in lower tile (dy=0, height 0..15)
+        if (surfaceY < 0 && tile0 != null) {
+            int y0 = this.findSurfaceInColumn(tile0, colX, colZ, -1, -1, probe);
+            if (y0 >= 0) {
+                surfaceY = y0;
+                copyTileData(probe, out);
+            }
+        }
+
+        if (surfaceY < 0) {
+            return -1;
+        }
+
+        // 3. Overhang detection: check if surfaceY is an external overhang with air below (Refinement 2)
+        int ceilingY = -1;
+        int ceilingSkyLight = 0;
+
+        // Check if surfaceY itself has a downward-facing ceiling face
+        if (((out.edges >> 2) & EDGE_DIR_NEGATIVE) != 0) {
+            ceilingY = surfaceY;
+            ceilingSkyLight = BlockLevelConstants.unpackSkyLight(out.light);
+        }
+
+        // Scan downwards below surfaceY
+        int lowerGroundY = -1;
+        TileData groundData = new TileData();
+
+        for (int y = surfaceY - 1; y >= 0; y--) {
+            boolean hasVoxel = getVoxelInStack(tile0, tile1, colX, colZ, y, probe);
+            if (hasVoxel && probe.edges != 0) {
+                if (((probe.edges >> 2) & EDGE_DIR_NEGATIVE) != 0) {
+                    ceilingY = y;
+                    int sky = BlockLevelConstants.unpackSkyLight(probe.light);
+                    if (sky > ceilingSkyLight) {
+                        ceilingSkyLight = sky;
                     }
-                }
-                if (bestIdx >= 0) {
-                    surfaces[i] = surfaces[bestIdx];
-                    if (states[i] == 0) {
-                        states[i] = states[bestIdx];
-                    }
-                    if (lights[i] == 0) {
-                        lights[i] = lights[bestIdx];
+                } else if (ceilingY >= 0 && ((probe.edges >> 2) & EDGE_DIR_POSITIVE) != 0) {
+                    int state = surfaceState(probe, 1);
+                    if (!this.levelRenderer.isFoliage(state)) {
+                        lowerGroundY = y;
+                        copyTileData(probe, groundData);
+                        break;
                     }
                 }
             }
+        }
+
+        if (ceilingY >= 0) {
+            boolean isExternalOverhang = (ceilingSkyLight > 0)
+                    || (lowerGroundY >= 0 && BlockLevelConstants.unpackSkyLight(groundData.light) > 0);
+
+            if (isExternalOverhang) {
+                if (lowerGroundY >= 0) {
+                    // Use the lower ground surface beneath the overhang
+                    copyTileData(groundData, out);
+                    return lowerGroundY;
+                } else {
+                    // External overhang with only open air below: do not drop a curtain into the canyon
+                    return -1;
+                }
+            }
+        }
+
+        return surfaceY;
+    }
+
+    private static void copyTileData(TileData src, TileData dst) {
+        dst.x = src.x;
+        dst.y = src.y;
+        dst.z = src.z;
+        dst.edges = src.edges;
+        System.arraycopy(src.states, 0, dst.states, 0, EDGE_COUNT);
+        dst.biome = src.biome;
+        dst.light = src.light;
+    }
+
+    private static boolean getVoxelInStack(Tile tile0, Tile tile1, int colX, int colZ, int stackY, TileData out) {
+        if (stackY >= T_VOXELS) {
+            return tile1 != null && tile1.get(colX, stackY - T_VOXELS, colZ, out);
+        } else {
+            return tile0 != null && tile0.get(colX, stackY, colZ, out);
         }
     }
 
