@@ -266,6 +266,9 @@ public final class SkirtDiag {
     }
 
     private static synchronized void write(String s) {
+        if (!Boolean.getBoolean("fp2.debug")) {
+            return;
+        }
         try (FileWriter writer = new FileWriter("C:/Users/GM/Desktop/fp2f/fp2_skirt.txt", true)) {
             writer.write(s);
         } catch (IOException ignored) {

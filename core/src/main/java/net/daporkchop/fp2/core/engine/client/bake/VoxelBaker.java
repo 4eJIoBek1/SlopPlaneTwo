@@ -374,8 +374,6 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
     protected void buildSeamAxis(boolean xAxis, Tile[] srcs, GapList gaps, int blockX, int blockY, int blockZ, int level, AttributeWriter<VoxelLocalAttributes> verts, IndexWriter[] indices) {
         Tile src = srcs[0];
         Tile neighbour = xAxis ? srcs[4] : srcs[1];
-        Tile aboveNeighbour = xAxis ? srcs[6] : srcs[3];
-        Tile aboveSrc = srcs[2];
         if (src == null || neighbour == null) {
             return;
         }
@@ -407,17 +405,6 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
                 ourStates[perp] = surfaceState(ours, 1);
                 ourLights[perp] = ours.light;
                 knownOurCount++;
-            } else if (aboveSrc != null) {
-                int aboveOurY = this.findSurfaceInColumn(aboveSrc, ourColX, ourColZ, -1, -1, ours);
-                if (aboveOurY >= 0) {
-                    ourY = aboveOurY + T_VOXELS;
-                    rawOur[perp] = (ourY << POS_FRACT_SHIFT) + (ours.y & fractMask);
-                    ourStates[perp] = surfaceState(ours, 1);
-                    ourLights[perp] = ours.light;
-                    knownOurCount++;
-                } else {
-                    rawOur[perp] = -1;
-                }
             } else {
                 rawOur[perp] = -1;
             }
@@ -425,27 +412,9 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
             theirs.reset();
             int theirY = -1;
             if (ourY >= 0) {
-                int refNeighbour = ourY >= T_VOXELS ? ourY - T_VOXELS : ourY;
-                Tile primaryNeighbour = ourY >= T_VOXELS && aboveNeighbour != null ? aboveNeighbour : neighbour;
-                theirY = this.findSurfaceInColumn(primaryNeighbour, theirColX, theirColZ, refNeighbour, -1, theirs);
-                if (theirY >= 0 && primaryNeighbour == aboveNeighbour) {
-                    theirY += T_VOXELS;
-                }
-                if (theirY < 0 && aboveNeighbour != null && primaryNeighbour == neighbour) {
-                    int refAbove = Math.max(0, ourY - T_VOXELS);
-                    int aboveY = this.findSurfaceInColumn(aboveNeighbour, theirColX, theirColZ, refAbove, -1, theirs);
-                    if (aboveY >= 0) {
-                        theirY = aboveY + T_VOXELS;
-                    }
-                }
+                theirY = this.findSurfaceInColumn(neighbour, theirColX, theirColZ, ourY, -1, theirs);
             } else {
                 theirY = this.findSurfaceInColumn(neighbour, theirColX, theirColZ, -1, -1, theirs);
-                if (theirY < 0 && aboveNeighbour != null) {
-                    int aboveY = this.findSurfaceInColumn(aboveNeighbour, theirColX, theirColZ, -1, -1, theirs);
-                    if (aboveY >= 0) {
-                        theirY = aboveY + T_VOXELS;
-                    }
-                }
             }
 
             if (theirY >= 0) {
@@ -458,52 +427,20 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
             }
         }
 
-        // If neither tile has any surface in any column, nothing to connect
-        if (knownOurCount == 0 && knownTheirCount == 0) {
+        // If either tile has no surface in any column, there is no surface-to-surface seam to connect
+        if (knownOurCount == 0 || knownTheirCount == 0) {
             return;
         }
 
         // Phase 2: Bridge missing surfaces by propagating along the seam
-        if (knownOurCount > 0 && knownOurCount < T_VOXELS) {
+        if (knownOurCount < T_VOXELS) {
             fillMissingFromNearest(rawOur, ourStates, ourLights);
         }
-        if (knownTheirCount > 0 && knownTheirCount < T_VOXELS) {
+        if (knownTheirCount < T_VOXELS) {
             fillMissingFromNearest(rawTheir, theirStates, theirLights);
         }
 
-        // Phase 3: If an entire tile has no surface, determine if it represents solid rock (higher) or air (lower)
         final int tilePlaneTop = T_VOXELS << POS_FRACT_SHIFT;
-        if (knownOurCount == 0) {
-            if (aboveSrc != null && aboveSrc.count() > 0) {
-                Arrays.fill(rawOur, tilePlaneTop);
-                for (int p = 0; p < T_VOXELS; p++) {
-                    ourStates[p] = theirStates[p];
-                    ourLights[p] = theirLights[p];
-                }
-            } else {
-                Arrays.fill(rawOur, 0);
-                for (int p = 0; p < T_VOXELS; p++) {
-                    ourStates[p] = theirStates[p];
-                    ourLights[p] = theirLights[p];
-                }
-            }
-        }
-        if (knownTheirCount == 0) {
-            if (aboveNeighbour != null && aboveNeighbour.count() > 0) {
-                Arrays.fill(rawTheir, tilePlaneTop);
-                for (int p = 0; p < T_VOXELS; p++) {
-                    theirStates[p] = ourStates[p];
-                    theirLights[p] = ourLights[p];
-                }
-            } else {
-                Arrays.fill(rawTheir, 0);
-                for (int p = 0; p < T_VOXELS; p++) {
-                    theirStates[p] = ourStates[p];
-                    theirLights[p] = ourLights[p];
-                }
-            }
-        }
-
         final boolean[] hasSeam = new boolean[T_VOXELS];
         final int[] colLow = new int[T_VOXELS];
         final int[] colHigh = new int[T_VOXELS];
@@ -515,33 +452,30 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
             int ourSurface = rawOur[perp];
             int theirSurface = rawTheir[perp];
 
-            int diff = Math.abs(ourSurface - theirSurface);
-            if (diff > 0) {
-                int low = Math.max(0, Math.min(ourSurface, theirSurface));
-                int high = Math.min(tilePlaneTop, Math.max(ourSurface, theirSurface));
-                colLow[perp] = low;
-                colHigh[perp] = high;
-                if (high > low) {
-                    hasSeam[perp] = true;
-                    boolean theirsHigher = theirSurface >= ourSurface;
-                    int sHigh = theirsHigher ? theirStates[perp] : ourStates[perp];
-                    int sLow = theirsHigher ? ourStates[perp] : theirStates[perp];
-                    int state = sHigh;
-                    if (this.levelRenderer.renderTypeForState(state) != RenderConstants.LAYER_SOLID
-                            && this.levelRenderer.renderTypeForState(sLow) == RenderConstants.LAYER_SOLID) {
-                        state = sLow;
-                    }
-                    if (state == 0) {
-                        state = sLow != 0 ? sLow : (sHigh != 0 ? sHigh : 1);
-                    }
-                    seamState[perp] = state;
-                    byte light = theirsHigher ? theirLights[perp] : ourLights[perp];
-                    seamLight[perp] = light != 0 ? light : (byte) ((15 << 4) | 15);
-                    anySeam = true;
+            int low = Math.max(0, Math.min(ourSurface, theirSurface));
+            int high = Math.min(tilePlaneTop, Math.max(ourSurface, theirSurface));
+            colLow[perp] = low;
+            colHigh[perp] = high;
+            if (high > low) {
+                hasSeam[perp] = true;
+                boolean theirsHigher = theirSurface >= ourSurface;
+                int sHigh = theirsHigher ? theirStates[perp] : ourStates[perp];
+                int sLow = theirsHigher ? ourStates[perp] : theirStates[perp];
+                int state = sHigh;
+                if (this.levelRenderer.renderTypeForState(state) != RenderConstants.LAYER_SOLID
+                        && this.levelRenderer.renderTypeForState(sLow) == RenderConstants.LAYER_SOLID) {
+                    state = sLow;
                 }
+                if (state == 0) {
+                    state = sLow != 0 ? sLow : (sHigh != 0 ? sHigh : 1);
+                }
+                seamState[perp] = state;
+                byte light = theirsHigher ? theirLights[perp] : ourLights[perp];
+                seamLight[perp] = light != 0 ? light : (byte) ((15 << 4) | 15);
+                anySeam = true;
             } else {
-                colLow[perp] = Math.max(0, Math.min(ourSurface, theirSurface));
-                colHigh[perp] = colLow[perp];
+                seamState[perp] = ourStates[perp] != 0 ? ourStates[perp] : (theirStates[perp] != 0 ? theirStates[perp] : 1);
+                seamLight[perp] = ourLights[perp] != 0 ? ourLights[perp] : theirLights[perp];
             }
         }
 
@@ -576,10 +510,6 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
         int wallsBuilt = 0;
 
         for (int dz = 0; dz < T_VOXELS; dz++) {
-            if (!hasSeam[dz]) {
-                continue;
-            }
-
             int p0 = dz << POS_FRACT_SHIFT;
             int p1 = (dz + 1) << POS_FRACT_SHIFT;
             int low0 = cornerLow[dz];
@@ -670,30 +600,21 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
         }
 
         if (refY < 0) {
-            int foliageY = -1;
             for (int y = T_VOXELS - 1; y >= 0; y--) {
                 if (!tile.get(colX, y, colZ, out) || out.edges == 0) {
                     continue;
                 }
                 int state = surfaceState(out, 1);
                 if (this.levelRenderer.isFoliage(state)) {
-                    if (foliageY < 0) {
-                        foliageY = y;
-                    }
                     continue;
                 }
                 if (type < 0 || this.levelRenderer.renderTypeForState(state) == type) {
                     return y;
                 }
             }
-            if (foliageY >= 0) {
-                tile.get(colX, foliageY, colZ, out);
-                return foliageY;
-            }
             return -1;
         }
 
-        int foliageY = -1;
         for (int d = 0; d <= SEAM_SEARCH_RADIUS; d++) {
             for (int side = 0, sides = (d > 0 ? 2 : 1); side < sides; side++) {
                 final int y = side == 0 ? refY - d : refY + d;
@@ -706,19 +627,12 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
                 }
                 int state = surfaceState(out, 1);
                 if (this.levelRenderer.isFoliage(state)) {
-                    if (foliageY < 0) {
-                        foliageY = y;
-                    }
                     continue;
                 }
                 if (type < 0 || this.levelRenderer.renderTypeForState(state) == type) {
                     return y;
                 }
             }
-        }
-        if (foliageY >= 0) {
-            tile.get(colX, foliageY, colZ, out);
-            return foliageY;
         }
         return -1;
     }
@@ -798,9 +712,9 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
     protected int appendFilledVertex(TileData data, int gx, int gy, int gz, int edge, int blockX, int blockY, int blockZ, int level, AttributeWriter<VoxelLocalAttributes> verts) {
         final int fractMask = this.forceBlockyMesh ? 0 : -1;
 
-        int posX = gx == T_VOXELS ? (T_VOXELS << POS_FRACT_SHIFT) : (gz == T_VOXELS ? (gx << POS_FRACT_SHIFT) : (gx << POS_FRACT_SHIFT) + (data.x & fractMask));
+        int posX = gx == T_VOXELS ? (T_VOXELS << POS_FRACT_SHIFT) : (gx << POS_FRACT_SHIFT) + (data.x & fractMask);
         int posY = (gy << POS_FRACT_SHIFT) + (data.y & fractMask);
-        int posZ = gz == T_VOXELS ? (T_VOXELS << POS_FRACT_SHIFT) : (gx == T_VOXELS ? (gz << POS_FRACT_SHIFT) : (gz << POS_FRACT_SHIFT) + (data.z & fractMask));
+        int posZ = gz == T_VOXELS ? (T_VOXELS << POS_FRACT_SHIFT) : (gz << POS_FRACT_SHIFT) + (data.z & fractMask);
 
         int state = surfaceState(data, edge);
 
