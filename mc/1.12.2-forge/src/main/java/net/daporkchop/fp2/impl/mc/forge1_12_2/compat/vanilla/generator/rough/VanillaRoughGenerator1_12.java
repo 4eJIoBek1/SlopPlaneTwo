@@ -192,6 +192,10 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
             }
         }
 
+        if (!loaded) {
+            return;
+        }
+
         for (int dy = 0; dy < CACHE_SIZE; dy++) {
             int sampleY = baseY + CACHE_MIN - 1 + dy;
             int targetY = CACHE_MIN + dy;
@@ -204,10 +208,8 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
                     state = stoneState;
                 } else if (sampleY >= 256) {
                     state = 0;
-                } else if (loaded) {
-                    state = ctx.tempStates[dy * 16 + dz];
                 } else {
-                    state = this.queryBoundaryStateSafe(exactWorld, sampleX, fallbackSampleX, sampleY, baseZ + dz, baseZ + dz, 0, stoneState);
+                    state = ctx.tempStates[dy * 16 + dz];
                 }
                 this.setBoundaryDensity(targetX, targetY, nz, state, densityMap, ctx);
                 if (extraTargetX != targetX) {
@@ -216,7 +218,7 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
             }
 
             // Узел nz = 0 (соответствует мировому sampleZ = baseZ - 1)
-            int fallbackZ0 = loaded ? (sampleY < 0 ? stoneState : (sampleY >= 256 ? 0 : ctx.tempStates[dy * 16])) : 0;
+            int fallbackZ0 = sampleY < 0 ? stoneState : (sampleY >= 256 ? 0 : ctx.tempStates[dy * 16]);
             int stateZ0 = this.queryBoundaryStateSafe(exactWorld, sampleX, fallbackSampleX, sampleY, baseZ - 1, baseZ, fallbackZ0, stoneState);
             this.setBoundaryDensity(targetX, targetY, 0, stateZ0, densityMap, ctx);
             if (extraTargetX != targetX) {
@@ -249,6 +251,10 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
             }
         }
 
+        if (!loaded) {
+            return;
+        }
+
         for (int dy = 0; dy < CACHE_SIZE; dy++) {
             int sampleY = baseY + CACHE_MIN - 1 + dy;
             int targetY = CACHE_MIN + dy;
@@ -261,10 +267,8 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
                     state = stoneState;
                 } else if (sampleY >= 256) {
                     state = 0;
-                } else if (loaded) {
-                    state = ctx.tempStates[dx * CACHE_SIZE + dy];
                 } else {
-                    state = this.queryBoundaryStateSafe(exactWorld, baseX + dx, baseX + dx, sampleY, sampleZ, fallbackSampleZ, 0, stoneState);
+                    state = ctx.tempStates[dx * CACHE_SIZE + dy];
                 }
                 this.setBoundaryDensity(nx, targetY, targetZ, state, densityMap, ctx);
                 if (extraTargetZ != targetZ) {
@@ -273,7 +277,7 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
             }
 
             // Узел nx = 0 (соответствует мировому sampleX = baseX - 1)
-            int fallbackX0 = loaded ? (sampleY < 0 ? stoneState : (sampleY >= 256 ? 0 : ctx.tempStates[dy])) : 0;
+            int fallbackX0 = sampleY < 0 ? stoneState : (sampleY >= 256 ? 0 : ctx.tempStates[dy]);
             int stateX0 = this.queryBoundaryStateSafe(exactWorld, baseX - 1, baseX, sampleY, sampleZ, fallbackSampleZ, fallbackX0, stoneState);
             this.setBoundaryDensity(0, targetY, targetZ, stateX0, densityMap, ctx);
             if (extraTargetZ != targetZ) {
@@ -285,10 +289,39 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
     private void sampleCornerColumn(
             FBlockLevel exactWorld, int primaryX, int fallbackX, int baseY, int primaryZ, int fallbackZ,
             int targetX, int targetZ, int stoneState, double[][] densityMap, VanillaRoughContext1_12 ctx) {
+        int sampleX = primaryX;
+        int sampleZ = primaryZ;
+        boolean loaded = false;
+        try {
+            exactWorld.multiGetDense(sampleX, baseY + CACHE_MIN - 1, sampleZ, 1, CACHE_SIZE, 1, ctx.tempStates, 0, null, 0, null, 0);
+            loaded = true;
+        } catch (GenerationNotAllowedException e) {
+            if (fallbackX != primaryX || fallbackZ != primaryZ) {
+                sampleX = fallbackX;
+                sampleZ = fallbackZ;
+                try {
+                    exactWorld.multiGetDense(sampleX, baseY + CACHE_MIN - 1, sampleZ, 1, CACHE_SIZE, 1, ctx.tempStates, 0, null, 0, null, 0);
+                    loaded = true;
+                } catch (GenerationNotAllowedException ignored) {
+                }
+            }
+        }
+
+        if (!loaded) {
+            return;
+        }
+
         for (int dy = 0; dy < CACHE_SIZE; dy++) {
             int sampleY = baseY + CACHE_MIN - 1 + dy;
             int targetY = CACHE_MIN + dy;
-            int state = this.queryBoundaryStateSafe(exactWorld, primaryX, fallbackX, sampleY, primaryZ, fallbackZ, 0, stoneState);
+            int state;
+            if (sampleY < 0) {
+                state = stoneState;
+            } else if (sampleY >= 256) {
+                state = 0;
+            } else {
+                state = ctx.tempStates[dy];
+            }
             this.setBoundaryDensity(targetX, targetY, targetZ, state, densityMap, ctx);
         }
     }
@@ -322,24 +355,21 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
         int worldY = ctx.tileBaseY + y;
 
         double waterBelowSea = (this.seaLevel() + 1e-4d - worldY);
-        // Микро-градиент по Y в воздухе гарантирует, что ny = d(y+1) - d(y) < 0 на горизонтальных поверхностях
-        // (чтобы getFaceState выбирал траву, а не камень, и нормаль в QEF не вырождалась в 0/0 = NaN)
-        double airDensity = -1.0d - 1e-6d * y;
 
         double d0, d1;
         IBlockState bs = state == 0 ? null : (IBlockState) this.registry().id2state(state);
         if (bs != null && bs.isOpaqueCube()) {
-            d1 = 1e-4d - 1e-7d * y;
-            d0 = waterBelowSea > 0.0d ? 1e-4d : airDensity;
+            d1 = 1.0d;
+            d0 = waterBelowSea > 0.0d ? 1.0d : -1.0d;
             if (x >= 0 && x < CACHE_SIZE && y >= 0 && y < CACHE_SIZE && z >= 0 && z < CACHE_SIZE) {
                 ctx.boundaryStates[idx] = state;
             }
         } else if (bs != null && bs.getMaterial().isLiquid()) {
-            d0 = 1e-4d - 1e-7d * y;
-            d1 = airDensity;
+            d0 = 1.0d;
+            d1 = -1.0d;
         } else {
-            d0 = airDensity;
-            d1 = airDensity;
+            d0 = -1.0d;
+            d1 = -1.0d;
         }
         densityMap[0][idx] = d0;
         densityMap[1][idx] = d1;
