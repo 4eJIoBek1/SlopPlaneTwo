@@ -269,10 +269,19 @@ public class QefSolver {
     public void add(double px, double py, double pz, double nx, double ny, double nz) {
         this.hasSolution = false;
 
-        double length = sqrt(nx * nx + ny * ny + nz * nz);
-        nx /= length;
-        ny /= length;
-        nz /= length;
+        double lengthSq = nx * nx + ny * ny + nz * nz;
+        if (lengthSq < 1e-12d || !Double.isFinite(px + py + pz + nx + ny + nz)) {
+            this.data.massPoint_x += px;
+            this.data.massPoint_y += py;
+            this.data.massPoint_z += pz;
+            this.data.numPoints++;
+            return;
+        }
+
+        double invLength = 1.0d / sqrt(lengthSq);
+        nx *= invLength;
+        ny *= invLength;
+        nz *= invLength;
 
         double dot = nx * px + ny * py + nz * pz;
 

@@ -64,9 +64,9 @@ public class VanillaRoughContext1_12 {
     protected final NoiseGeneratorOctaves mainNoise;
     protected final NoiseGeneratorOctaves depthNoise;
 
-    protected final double[] heights; //weighted raw biome heights (settings-space)
-    protected final double[] variations; //weighted raw biome variations (settings-space)
-    protected final double[] depthShaped; //shaped depth contribution (d7) per column
+    protected double[] heights; //weighted raw biome heights (settings-space)
+    protected double[] variations; //weighted raw biome variations (settings-space)
+    protected double[] depthShaped; //shaped depth contribution (d7) per column
 
     //vanilla's y lattice has 33 nodes (y indices 0..32)
     protected static final int COLUMN_NODES = 33;
@@ -88,6 +88,7 @@ public class VanillaRoughContext1_12 {
     protected int regionHStride; //column spacing in vanilla lattice units (1, or step/4 for level >= GTH_SHIFT)
     protected final double[] colBuf = new double[COLUMN_NODES]; //scratch for a single column of octave noise
     protected double[] columnHeights = new double[0]; //per-column surface heights (height-field mode)
+    protected int[] nodeBiomes = new int[0];
 
     //current initialization position (block space)
     protected int baseX;
@@ -152,40 +153,52 @@ public class VanillaRoughContext1_12 {
         this.baseZ = baseZ;
         this.level = level;
 
-        this.biomeProvider.generateBiomesAndWeightedHeightsVariations(baseX, baseZ, level, this.size, this.biomes, this.heights, this.variations, this.weightHelper);
+        int hStep = 1 << level;
+        int spanBlocks = (this.size - 1) * hStep;
+
+        // 1. Биомы для раскраски вокселей (в сетке тайла size x size)
+        this.biomeProvider.generateBiomesAndWeightedHeightsVariations(
+                baseX, baseZ, level, this.size, this.biomes,
+                this.heights = ensureCapacity(this.heights, this.size * this.size),
+                this.variations = ensureCapacity(this.variations, this.size * this.size),
+                this.weightHelper);
 
         //convert biome IDs to fp2 IDs
         for (int i = 0; i < this.size * this.size; i++) {
             this.biomes[i] = this.registry.biome2id(FastRegistry.getBiome(this.biomes[i]));
         }
 
-        //precompute shaped depth noise per column (2D, horizontal only).
-        //Vanilla 2D regions are laid out x-major: index = x * sizeZ + z.
-        int hStep = 1 << level;
-        double[] depthRaw;
-        if (level >= GTH_SHIFT) { //samples are grid-aligned: fold the stride into the scale for exact results
-            int s = hStep >> GTH_SHIFT;
-            depthRaw = this.depthNoise.generateNoiseOctaves(new double[this.size * this.size],
-                    Math.floorDiv(baseX, GTH_SIZE) / s, Math.floorDiv(baseZ, GTH_SIZE) / s, this.size, this.size,
-                    this.settings.depthNoiseScaleX * s, this.settings.depthNoiseScaleZ * s, this.settings.depthNoiseScaleExponent);
-            for (int i = 0; i < this.size * this.size; i++) {
-                this.depthShaped[i] = shapeDepth(depthRaw[i]);
-            }
-        } else { //generate the covering native grid and bilinearly interpolate
-            int span = (this.size - 1) * hStep;
-            int ngx0 = Math.floorDiv(baseX, GTH_SIZE);
-            int ngz0 = Math.floorDiv(baseZ, GTH_SIZE);
-            int nnx = (span >> GTH_SHIFT) + 2;
-            int nnz = (span >> GTH_SHIFT) + 2;
-            depthRaw = this.depthNoise.generateNoiseOctaves(new double[nnx * nnz], ngx0, ngz0, nnx, nnz,
-                    this.settings.depthNoiseScaleX, this.settings.depthNoiseScaleZ, this.settings.depthNoiseScaleExponent);
-            for (int dx = 0; dx < this.size; dx++) {
-                double fx = (double) (baseX + (dx << level)) / GTH_SIZE - ngx0;
-                for (int dz = 0; dz < this.size; dz++) {
-                    double fz = (double) (baseZ + (dz << level)) / GTH_SIZE - ngz0;
-                    this.depthShaped[dx * this.size + dz] = shapeDepth(sampleBilinear(depthRaw, nnx, nnz, fx, fz));
-                }
-            }
+        // 2. Точная решётка узлов 4x4 (мировые координаты узлов, НЕ зависящие от сдвига baseX = -1)
+        this.regionGX0 = Math.floorDiv(baseX, GTH_SIZE);
+        this.regionGZ0 = Math.floorDiv(baseZ, GTH_SIZE);
+        if (level >= GTH_SHIFT) {
+            this.regionHStride = hStep >> GTH_SHIFT;
+            this.regionNX = this.regionNZ = this.size;
+        } else {
+            this.regionHStride = 1;
+            int maxGX = Math.floorDiv(baseX + spanBlocks, GTH_SIZE);
+            int maxGZ = Math.floorDiv(baseZ + spanBlocks, GTH_SIZE);
+            int n = Math.max(maxGX - this.regionGX0, maxGZ - this.regionGZ0) + 2;
+            this.regionNX = this.regionNZ = n;
+
+            int nodeCount = n * n;
+            this.nodeBiomes = ensureCapacity(this.nodeBiomes, nodeCount);
+            this.heights = ensureCapacity(this.heights, nodeCount);
+            this.variations = ensureCapacity(this.variations, nodeCount);
+            this.biomeProvider.generateBiomesAndWeightedHeightsVariations(
+                    this.regionGX0 << GTH_SHIFT, this.regionGZ0 << GTH_SHIFT, GTH_SHIFT, n,
+                    this.nodeBiomes, this.heights, this.variations, this.weightHelper);
+        }
+
+        // 3. Вычисляем depthShaped напрямую в узлах решётки (regionNX x regionNZ)
+        int nodeCount = this.regionNX * this.regionNZ;
+        this.depthShaped = ensureCapacity(this.depthShaped, nodeCount);
+        int s = this.regionHStride;
+        double[] depthRaw = this.depthNoise.generateNoiseOctaves(
+                new double[nodeCount], this.regionGX0 / s, this.regionGZ0 / s, this.regionNX, this.regionNZ,
+                this.settings.depthNoiseScaleX * s, this.settings.depthNoiseScaleZ * s, this.settings.depthNoiseScaleExponent);
+        for (int i = 0; i < nodeCount; i++) {
+            this.depthShaped[i] = shapeDepth(depthRaw[i]);
         }
     }
 
@@ -283,15 +296,6 @@ public class VanillaRoughContext1_12 {
         //  per-column surface.
         boolean heightField = level >= HEIGHT_FIELD_LEVEL;
 
-        this.regionGX0 = Math.floorDiv(minBlockX, GTH_SIZE);
-        this.regionGZ0 = Math.floorDiv(minBlockZ, GTH_SIZE);
-        if (level >= GTH_SHIFT) { //samples are grid-aligned: one column per tile node
-            this.regionHStride = step >> GTH_SHIFT;
-            this.regionNX = this.regionNZ = size;
-        } else { //finer than the vanilla grid: cover the native columns and interpolate
-            this.regionHStride = 1;
-            this.regionNX = this.regionNZ = (spanBlocks >> GTH_SHIFT) + 2;
-        }
         //y run prefix: 0..(highest needed node + 1), capped at the vanilla length. The region must always cover at
         //  least two nodes (nothing can be interpolated on a single node), which can happen for tiles far below y=0.
         //in height-field mode the full column profile is always needed to locate the surface.
@@ -437,7 +441,7 @@ public class VanillaRoughContext1_12 {
 
                 double h;
                 if (d0 <= 0.0d) {
-                    h = Double.NEGATIVE_INFINITY; //no solid node anywhere in the column
+                    h = -1000.0d; //no solid node anywhere in the column, avoid Double.NEGATIVE_INFINITY which causes NaN
                 } else if (ny == lastNy) {
                     h = (lastNy + 1) * GTV_SIZE;
                 } else {
@@ -475,21 +479,7 @@ public class VanillaRoughContext1_12 {
         double maxv = this.maxRegion[idx];
         double mainv = this.mainRegion[idx];
 
-        int nodeBlockX = (this.regionGX0 + nx * this.regionHStride) * GTH_SIZE;
-        int nodeBlockZ = (this.regionGZ0 + nz * this.regionHStride) * GTH_SIZE;
-        int colX = (nodeBlockX - this.baseX) >> this.level;
-        int colZ = (nodeBlockZ - this.baseZ) >> this.level;
-        if (colX < 0) {
-            colX = 0;
-        } else if (colX >= this.size) {
-            colX = this.size - 1;
-        }
-        if (colZ < 0) {
-            colZ = 0;
-        } else if (colZ >= this.size) {
-            colZ = this.size - 1;
-        }
-        int colIdx = colX * this.size + colZ;
+        int colIdx = nx * this.regionNZ + nz;
 
         double variation = this.variations[colIdx] * 0.9d + 0.1d;
         double height = (this.heights[colIdx] * 4.0d - 1.0d) / 8.0d;
@@ -519,6 +509,10 @@ public class VanillaRoughContext1_12 {
 
     protected static double[] ensureCapacity(double[] arr, int length) {
         return arr.length >= length ? arr : new double[length];
+    }
+
+    protected static int[] ensureCapacity(int[] arr, int length) {
+        return arr.length >= length ? arr : new int[length];
     }
 
     protected static double clamp01Lerp(double lo, double hi, double t) {

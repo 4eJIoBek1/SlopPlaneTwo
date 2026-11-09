@@ -135,11 +135,19 @@ public abstract class AbstractDualContouringRoughVoxelGenerator<PARAM> extends A
                             layer = min(max(layer0, layer1) - 1, 1);
                         }
 
-                        //compute gradients in the current voxel on the chosen layer, which will also serve as the normal vector
-                        double densityBase = densityMap[layer][diBase + CACHE_INDEX_ADD_000];
-                        double nx = densityMap[layer][diBase + CACHE_INDEX_ADD_100] - densityBase;
-                        double ny = densityMap[layer][diBase + CACHE_INDEX_ADD_010] - densityBase;
-                        double nz = densityMap[layer][diBase + CACHE_INDEX_ADD_001] - densityBase;
+                        //compute averaged gradients in the current voxel on the chosen layer across all 4 parallel edges
+                        double d000 = densityMap[layer][diBase + CACHE_INDEX_ADD[0]];
+                        double d001 = densityMap[layer][diBase + CACHE_INDEX_ADD[1]];
+                        double d010 = densityMap[layer][diBase + CACHE_INDEX_ADD[2]];
+                        double d011 = densityMap[layer][diBase + CACHE_INDEX_ADD[3]];
+                        double d100 = densityMap[layer][diBase + CACHE_INDEX_ADD[4]];
+                        double d101 = densityMap[layer][diBase + CACHE_INDEX_ADD[5]];
+                        double d110 = densityMap[layer][diBase + CACHE_INDEX_ADD[6]];
+                        double d111 = densityMap[layer][diBase + CACHE_INDEX_ADD[7]];
+
+                        double nx = ((d100 - d000) + (d101 - d001) + (d110 - d010) + (d111 - d011)) * 0.25d;
+                        double ny = ((d010 - d000) + (d011 - d001) + (d110 - d100) + (d111 - d101)) * 0.25d;
+                        double nz = ((d001 - d000) + (d011 - d010) + (d101 - d100) + (d111 - d110)) * 0.25d;
                         totalNx += nx;
                         totalNy += ny;
                         totalNz += nz;
@@ -178,10 +186,10 @@ public abstract class AbstractDualContouringRoughVoxelGenerator<PARAM> extends A
                     data.edges = edges;
 
                     //solve QEF and set the tile data
-                    qef.solve(vec, 0.1, 1, 0.5);
-                    if (vec.x < 0.0d || vec.x > 1.0d
-                        || vec.y < 0.0d || vec.y > 1.0d
-                        || vec.z < 0.0d || vec.z > 1.0d) { //ensure that all points are within voxel bounds
+                    qef.solve(vec, 0.1d, 4, 0.5d);
+                    if (!(vec.x >= 0.0d && vec.x <= 1.0d
+                            && vec.y >= 0.0d && vec.y <= 1.0d
+                            && vec.z >= 0.0d && vec.z <= 1.0d)) { //ensure that all points are within voxel bounds, and catches NaN!
                         //if not, fall back to the mass point (basically the average position of all edge intersections), which is basically guaranteed to be within the voxel bounds
                         vec.set(qef.massPoint().x, qef.massPoint().y, qef.massPoint().z);
                     }
@@ -190,11 +198,18 @@ public abstract class AbstractDualContouringRoughVoxelGenerator<PARAM> extends A
                     data.y = clamp(floorI(vec.y * POS_ONE), 0, POS_ONE);
                     data.z = clamp(floorI(vec.z * POS_ONE), 0, POS_ONE);
 
-                    //normalize normal vector
-                    double nFactor = 1.0d / sqrt(totalNx * totalNx + totalNy * totalNy + totalNz * totalNz);
-                    totalNx *= nFactor;
-                    totalNy *= nFactor;
-                    totalNz *= nFactor;
+                    //normalize normal vector safely
+                    double nLenSq = totalNx * totalNx + totalNy * totalNy + totalNz * totalNz;
+                    if (nLenSq > 1e-12d) {
+                        double nFactor = 1.0d / sqrt(nLenSq);
+                        totalNx *= nFactor;
+                        totalNy *= nFactor;
+                        totalNz *= nFactor;
+                    } else {
+                        totalNx = 0.0d;
+                        totalNy = -1.0d;
+                        totalNz = 0.0d;
+                    }
 
                     this.populateVoxelBlockData(baseX + (dx << level), baseY + (dy << level), baseZ + (dz << level), level, totalNx, totalNy, totalNz, data, param);
 
