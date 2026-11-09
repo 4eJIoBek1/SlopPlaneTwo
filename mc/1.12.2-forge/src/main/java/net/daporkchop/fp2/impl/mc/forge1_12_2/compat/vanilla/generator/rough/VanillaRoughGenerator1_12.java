@@ -105,241 +105,109 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
         this.dualContour(baseX, baseY, baseZ, level, tile, densityMap, ctx);
     }
 
-    /**
-     * Проверяет, сможет ли соседний тайл (tileBaseX, tileBaseZ) реально сгенерироваться через AbstractExactVoxelGenerator.
-     * AbstractExactVoxelGenerator запрашивает multiGetDense от (minBlock + CACHE_MIN - 1) = (tileBase - 2) размера 18,
-     * что затрагивает 4 чанка: [tileBase - 2 .. tileBase + 15]. Если хотя бы один из них не загружен в RAM,
-     * сосед упадет в Rough-генератор, и сшивать его как Exact НЕЛЬЗЯ!
-     */
-    protected boolean isExactTileAvailable(FBlockLevel exactWorld, int tileBaseX, int tileBaseZ) {
-        try {
-            exactWorld.getState(tileBaseX - 2, 64, tileBaseZ - 2);
-            exactWorld.getState(tileBaseX + 15, 64, tileBaseZ - 2);
-            exactWorld.getState(tileBaseX - 2, 64, tileBaseZ + 15);
-            exactWorld.getState(tileBaseX + 15, 64, tileBaseZ + 15);
-            return true;
-        } catch (GenerationNotAllowedException e) {
-            return false;
-        }
-    }
-
     protected void blendExactBoundaries(int baseX, int baseY, int baseZ, double[][] densityMap, VanillaRoughContext1_12 ctx) {
         try (FBlockLevel exactWorld = this.world().exactBlockLevelHolder().worldFor(ExactFBlockLevelHolder.AllowGenerationRequirement.DONT_CARE)) {
             int stoneState = this.registry().state2id(Blocks.STONE.getDefaultState());
 
-            boolean negX = this.isExactTileAvailable(exactWorld, baseX - 16, baseZ);
-            boolean posX = this.isExactTileAvailable(exactWorld, baseX + 16, baseZ);
-            boolean negZ = this.isExactTileAvailable(exactWorld, baseX, baseZ - 16);
-            boolean posZ = this.isExactTileAvailable(exactWorld, baseX, baseZ + 16);
-
-            boolean negXnegZ = this.isExactTileAvailable(exactWorld, baseX - 16, baseZ - 16);
-            boolean posXnegZ = this.isExactTileAvailable(exactWorld, baseX + 16, baseZ - 16);
-            boolean negXposZ = this.isExactTileAvailable(exactWorld, baseX - 16, baseZ + 16);
-            boolean posXposZ = this.isExactTileAvailable(exactWorld, baseX + 16, baseZ + 16);
-
-            if (negX) {
-                this.sampleBoundaryLineX(exactWorld, baseX - 1, baseX - 1, baseY, baseZ, 0, 0, stoneState, densityMap, ctx);
-            }
-            if (posX) {
-                this.sampleBoundaryLineX(exactWorld, baseX + 15, baseX + 15, baseY, baseZ, 16, 16, stoneState, densityMap, ctx);
-            }
-            if (negZ) {
-                this.sampleBoundaryLineZ(exactWorld, baseX, baseY, baseZ - 1, baseZ - 1, 0, 0, stoneState, densityMap, ctx);
-            }
-            if (posZ) {
-                this.sampleBoundaryLineZ(exactWorld, baseX, baseY, baseZ + 15, baseZ + 15, 16, 16, stoneState, densityMap, ctx);
-            }
-
-            if (!negX && !negZ && negXnegZ) {
-                this.sampleCornerColumn(exactWorld, baseX - 1, baseX - 1, baseY, baseZ - 1, baseZ - 1, 0, 0, stoneState, densityMap, ctx);
-            }
-            if (!posX && !negZ && posXnegZ) {
-                this.sampleCornerColumn(exactWorld, baseX + 15, baseX + 15, baseY, baseZ - 1, baseZ - 1, 16, 0, stoneState, densityMap, ctx);
-            }
-            if (!negX && !posZ && negXposZ) {
-                this.sampleCornerColumn(exactWorld, baseX - 1, baseX - 1, baseY, baseZ + 15, baseZ + 15, 0, 16, stoneState, densityMap, ctx);
-            }
-            if (!posX && !posZ && posXposZ) {
-                this.sampleCornerColumn(exactWorld, baseX + 15, baseX + 15, baseY, baseZ + 15, baseZ + 15, 16, 16, stoneState, densityMap, ctx);
-            }
-        }
-    }
-
-    /**
-     * Сэмплирует вертикальный срез вдоль оси Z (для фиксированного узла targetX) по правилу sampleZ = baseZ + nz - 1.
-     */
-    private void sampleBoundaryLineX(
-            FBlockLevel exactWorld, int primarySampleX, int fallbackSampleX,
-            int baseY, int baseZ, int targetX, int extraTargetX,
-            int stoneState, double[][] densityMap, VanillaRoughContext1_12 ctx) {
-        int sampleX = primarySampleX;
-        boolean loaded = false;
-        try {
-            // Запрашиваем 16 блоков по Z: для nz = 1..16 это мировые координаты [baseZ .. baseZ + 15]
-            exactWorld.multiGetDense(sampleX, baseY + CACHE_MIN - 1, baseZ, 1, CACHE_SIZE, 16, ctx.tempStates, 0, null, 0, null, 0);
-            loaded = true;
-        } catch (GenerationNotAllowedException e) {
-            if (fallbackSampleX != primarySampleX) {
-                sampleX = fallbackSampleX;
+            // Boundary -X
+            if (exactWorld.containsAnyData(baseX - 16, baseY, baseZ, baseX, baseY + 16, baseZ + 16)) {
                 try {
-                    exactWorld.multiGetDense(sampleX, baseY + CACHE_MIN - 1, baseZ, 1, CACHE_SIZE, 16, ctx.tempStates, 0, null, 0, null, 0);
-                    loaded = true;
+                    exactWorld.multiGetDense(baseX - 1, baseY + CACHE_MIN, baseZ, 1, CACHE_SIZE, 16, ctx.tempStates, 0, null, 0, null, 0);
+                    for (int dy = 0; dy < CACHE_SIZE; dy++) {
+                        int worldY = baseY + CACHE_MIN + dy;
+                        int targetY = CACHE_MIN + dy;
+                        for (int dz = 0; dz < 16; dz++) {
+                            int queryIdx = dy * 16 + dz;
+                            int state = (worldY < 0) ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[queryIdx]);
+                            this.setBoundaryDensity(0, targetY, dz, state, densityMap, ctx);
+                            this.setBoundaryDensity(-1, targetY, dz, state, densityMap, ctx);
+                        }
+                        int state16 = this.queryBoundaryStateSafe(exactWorld, baseX - 1, worldY, baseZ + 16, worldY < 0 ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[dy * 16 + 15]), stoneState);
+                        this.setBoundaryDensity(0, targetY, 16, state16, densityMap, ctx);
+                        this.setBoundaryDensity(-1, targetY, 16, state16, densityMap, ctx);
+                    }
+                } catch (GenerationNotAllowedException ignored) {
+                }
+            }
+
+            // Boundary +X
+            if (exactWorld.containsAnyData(baseX + 16, baseY, baseZ, baseX + 32, baseY + 16, baseZ + 16)) {
+                try {
+                    exactWorld.multiGetDense(baseX + 16, baseY + CACHE_MIN, baseZ, 1, CACHE_SIZE, 16, ctx.tempStates, 0, null, 0, null, 0);
+                    for (int dy = 0; dy < CACHE_SIZE; dy++) {
+                        int worldY = baseY + CACHE_MIN + dy;
+                        int targetY = CACHE_MIN + dy;
+                        for (int dz = 0; dz < 16; dz++) {
+                            int queryIdx = dy * 16 + dz;
+                            int state = (worldY < 0) ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[queryIdx]);
+                            this.setBoundaryDensity(16, targetY, dz, state, densityMap, ctx);
+                        }
+                        int state16 = this.queryBoundaryStateSafe(exactWorld, baseX + 16, worldY, baseZ + 16, worldY < 0 ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[dy * 16 + 15]), stoneState);
+                        this.setBoundaryDensity(16, targetY, 16, state16, densityMap, ctx);
+                    }
+                } catch (GenerationNotAllowedException ignored) {
+                }
+            }
+
+            // Boundary -Z
+            if (exactWorld.containsAnyData(baseX, baseY, baseZ - 16, baseX + 16, baseY + 16, baseZ)) {
+                try {
+                    exactWorld.multiGetDense(baseX, baseY + CACHE_MIN, baseZ - 1, 16, CACHE_SIZE, 1, ctx.tempStates, 0, null, 0, null, 0);
+                    for (int dx = 0; dx < 16; dx++) {
+                        for (int dy = 0; dy < CACHE_SIZE; dy++) {
+                            int queryIdx = dx * CACHE_SIZE + dy;
+                            int worldY = baseY + CACHE_MIN + dy;
+                            int targetY = CACHE_MIN + dy;
+                            int state = (worldY < 0) ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[queryIdx]);
+                            this.setBoundaryDensity(dx, targetY, 0, state, densityMap, ctx);
+                            this.setBoundaryDensity(dx, targetY, -1, state, densityMap, ctx);
+                        }
+                    }
+                    for (int dy = 0; dy < CACHE_SIZE; dy++) {
+                        int worldY = baseY + CACHE_MIN + dy;
+                        int targetY = CACHE_MIN + dy;
+                        int state16 = this.queryBoundaryStateSafe(exactWorld, baseX + 16, worldY, baseZ - 1, worldY < 0 ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[15 * CACHE_SIZE + dy]), stoneState);
+                        this.setBoundaryDensity(16, targetY, 0, state16, densityMap, ctx);
+                        this.setBoundaryDensity(16, targetY, -1, state16, densityMap, ctx);
+                    }
+                } catch (GenerationNotAllowedException ignored) {
+                }
+            }
+
+            // Boundary +Z
+            if (exactWorld.containsAnyData(baseX, baseY, baseZ + 16, baseX + 16, baseY + 16, baseZ + 32)) {
+                try {
+                    exactWorld.multiGetDense(baseX, baseY + CACHE_MIN, baseZ + 16, 16, CACHE_SIZE, 1, ctx.tempStates, 0, null, 0, null, 0);
+                    for (int dx = 0; dx < 16; dx++) {
+                        for (int dy = 0; dy < CACHE_SIZE; dy++) {
+                            int queryIdx = dx * CACHE_SIZE + dy;
+                            int worldY = baseY + CACHE_MIN + dy;
+                            int targetY = CACHE_MIN + dy;
+                            int state = (worldY < 0) ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[queryIdx]);
+                            this.setBoundaryDensity(dx, targetY, 16, state, densityMap, ctx);
+                        }
+                    }
+                    for (int dy = 0; dy < CACHE_SIZE; dy++) {
+                        int worldY = baseY + CACHE_MIN + dy;
+                        int targetY = CACHE_MIN + dy;
+                        int state16 = this.queryBoundaryStateSafe(exactWorld, baseX + 16, worldY, baseZ + 16, worldY < 0 ? stoneState : (worldY >= 256 ? 0 : ctx.tempStates[15 * CACHE_SIZE + dy]), stoneState);
+                        this.setBoundaryDensity(16, targetY, 16, state16, densityMap, ctx);
+                    }
                 } catch (GenerationNotAllowedException ignored) {
                 }
             }
         }
-
-        if (!loaded) {
-            return;
-        }
-
-        for (int dy = 0; dy < CACHE_SIZE; dy++) {
-            int sampleY = baseY + CACHE_MIN - 1 + dy;
-            int targetY = CACHE_MIN + dy;
-
-            // Узлы nz = 1..16 (соответствуют мировым sampleZ = baseZ .. baseZ + 15)
-            for (int nz = 1; nz <= 16; nz++) {
-                int dz = nz - 1; // 0..15 в tempStates
-                int state;
-                if (sampleY < 0) {
-                    state = stoneState;
-                } else if (sampleY >= 256) {
-                    state = 0;
-                } else {
-                    state = ctx.tempStates[dy * 16 + dz];
-                }
-                this.setBoundaryDensity(targetX, targetY, nz, state, densityMap, ctx);
-                if (extraTargetX != targetX) {
-                    this.setBoundaryDensity(extraTargetX, targetY, nz, state, densityMap, ctx);
-                }
-            }
-
-            // Узел nz = 0 (соответствует мировому sampleZ = baseZ - 1)
-            int fallbackZ0 = sampleY < 0 ? stoneState : (sampleY >= 256 ? 0 : ctx.tempStates[dy * 16]);
-            int stateZ0 = this.queryBoundaryStateSafe(exactWorld, sampleX, fallbackSampleX, sampleY, baseZ - 1, baseZ, fallbackZ0, stoneState);
-            this.setBoundaryDensity(targetX, targetY, 0, stateZ0, densityMap, ctx);
-            if (extraTargetX != targetX) {
-                this.setBoundaryDensity(extraTargetX, targetY, 0, stateZ0, densityMap, ctx);
-            }
-        }
     }
 
-    /**
-     * Сэмплирует вертикальный срез вдоль оси X (для фиксированного узла targetZ) по правилу sampleX = baseX + nx - 1.
-     */
-    private void sampleBoundaryLineZ(
-            FBlockLevel exactWorld, int baseX, int baseY,
-            int primarySampleZ, int fallbackSampleZ, int targetZ, int extraTargetZ,
-            int stoneState, double[][] densityMap, VanillaRoughContext1_12 ctx) {
-        int sampleZ = primarySampleZ;
-        boolean loaded = false;
-        try {
-            // Запрашиваем 16 блоков по X: для nx = 1..16 это мировые координаты [baseX .. baseX + 15]
-            exactWorld.multiGetDense(baseX, baseY + CACHE_MIN - 1, sampleZ, 16, CACHE_SIZE, 1, ctx.tempStates, 0, null, 0, null, 0);
-            loaded = true;
-        } catch (GenerationNotAllowedException e) {
-            if (fallbackSampleZ != primarySampleZ) {
-                sampleZ = fallbackSampleZ;
-                try {
-                    exactWorld.multiGetDense(baseX, baseY + CACHE_MIN - 1, sampleZ, 16, CACHE_SIZE, 1, ctx.tempStates, 0, null, 0, null, 0);
-                    loaded = true;
-                } catch (GenerationNotAllowedException ignored) {
-                }
-            }
-        }
-
-        if (!loaded) {
-            return;
-        }
-
-        for (int dy = 0; dy < CACHE_SIZE; dy++) {
-            int sampleY = baseY + CACHE_MIN - 1 + dy;
-            int targetY = CACHE_MIN + dy;
-
-            // Узлы nx = 1..16 (соответствуют мировым sampleX = baseX .. baseX + 15)
-            for (int nx = 1; nx <= 16; nx++) {
-                int dx = nx - 1; // 0..15 в tempStates
-                int state;
-                if (sampleY < 0) {
-                    state = stoneState;
-                } else if (sampleY >= 256) {
-                    state = 0;
-                } else {
-                    state = ctx.tempStates[dx * CACHE_SIZE + dy];
-                }
-                this.setBoundaryDensity(nx, targetY, targetZ, state, densityMap, ctx);
-                if (extraTargetZ != targetZ) {
-                    this.setBoundaryDensity(nx, targetY, extraTargetZ, state, densityMap, ctx);
-                }
-            }
-
-            // Узел nx = 0 (соответствует мировому sampleX = baseX - 1)
-            int fallbackX0 = sampleY < 0 ? stoneState : (sampleY >= 256 ? 0 : ctx.tempStates[dy]);
-            int stateX0 = this.queryBoundaryStateSafe(exactWorld, baseX - 1, baseX, sampleY, sampleZ, fallbackSampleZ, fallbackX0, stoneState);
-            this.setBoundaryDensity(0, targetY, targetZ, stateX0, densityMap, ctx);
-            if (extraTargetZ != targetZ) {
-                this.setBoundaryDensity(0, targetY, extraTargetZ, stateX0, densityMap, ctx);
-            }
-        }
-    }
-
-    private void sampleCornerColumn(
-            FBlockLevel exactWorld, int primaryX, int fallbackX, int baseY, int primaryZ, int fallbackZ,
-            int targetX, int targetZ, int stoneState, double[][] densityMap, VanillaRoughContext1_12 ctx) {
-        int sampleX = primaryX;
-        int sampleZ = primaryZ;
-        boolean loaded = false;
-        try {
-            exactWorld.multiGetDense(sampleX, baseY + CACHE_MIN - 1, sampleZ, 1, CACHE_SIZE, 1, ctx.tempStates, 0, null, 0, null, 0);
-            loaded = true;
-        } catch (GenerationNotAllowedException e) {
-            if (fallbackX != primaryX || fallbackZ != primaryZ) {
-                sampleX = fallbackX;
-                sampleZ = fallbackZ;
-                try {
-                    exactWorld.multiGetDense(sampleX, baseY + CACHE_MIN - 1, sampleZ, 1, CACHE_SIZE, 1, ctx.tempStates, 0, null, 0, null, 0);
-                    loaded = true;
-                } catch (GenerationNotAllowedException ignored) {
-                }
-            }
-        }
-
-        if (!loaded) {
-            return;
-        }
-
-        for (int dy = 0; dy < CACHE_SIZE; dy++) {
-            int sampleY = baseY + CACHE_MIN - 1 + dy;
-            int targetY = CACHE_MIN + dy;
-            int state;
-            if (sampleY < 0) {
-                state = stoneState;
-            } else if (sampleY >= 256) {
-                state = 0;
-            } else {
-                state = ctx.tempStates[dy];
-            }
-            this.setBoundaryDensity(targetX, targetY, targetZ, state, densityMap, ctx);
-        }
-    }
-
-    private int queryBoundaryStateSafe(
-            FBlockLevel exactWorld, int primaryX, int fallbackX, int y, int primaryZ, int fallbackZ,
-            int fallbackState, int stoneState) {
+    private int queryBoundaryStateSafe(FBlockLevel exactWorld, int x, int y, int z, int fallbackState, int stoneState) {
         if (y < 0) {
             return stoneState;
         } else if (y >= 256) {
             return 0;
         }
         try {
-            return exactWorld.getState(primaryX, y, primaryZ);
-        } catch (Exception e1) {
-            if (fallbackX != primaryX || fallbackZ != primaryZ) {
-                try {
-                    return exactWorld.getState(fallbackX, y, fallbackZ);
-                } catch (Exception ignored) {
-                }
-            }
+            return exactWorld.getState(x, y, z);
+        } catch (Exception ignored) {
             return fallbackState;
         }
     }
@@ -348,24 +216,22 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
         if (x < CACHE_MIN || x >= CACHE_MAX || y < CACHE_MIN || y >= CACHE_MAX || z < CACHE_MIN || z >= CACHE_MAX) {
             return;
         }
-        int idx = cacheIndex(x, y, z);
-
-        int blockType = this.extendedStateRegistryData().type(state);
-
         double d0, d1;
-        if (blockType == BLOCK_TYPE_OPAQUE) {
+        IBlockState bs = state == 0 ? null : (IBlockState) this.registry().id2state(state);
+        if (bs != null && bs.isOpaqueCube()) {
+            d1 = 1.0d;
             d0 = -1.0d;
-            d1 = 1.0e-3d;
             if (x >= 0 && x < CACHE_SIZE && y >= 0 && y < CACHE_SIZE && z >= 0 && z < CACHE_SIZE) {
-                ctx.boundaryStates[idx] = state;
+                ctx.boundaryStates[cacheIndex(x, y, z)] = state;
             }
-        } else if (blockType == BLOCK_TYPE_TRANSPARENT) {
-            d0 = 1.0e-3d;
+        } else if (bs != null && bs.getMaterial().isLiquid()) {
+            d0 = 1.0d;
             d1 = -1.0d;
         } else {
             d0 = -1.0d;
             d1 = -1.0d;
         }
+        int idx = cacheIndex(x, y, z);
         densityMap[0][idx] = d0;
         densityMap[1][idx] = d1;
     }
@@ -381,24 +247,23 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
             int dy = blockY - ctx.tileBaseY;
             int dz = blockZ - ctx.tileBaseZ;
             if (dx >= 0 && dx < 16 && dy >= 0 && dy < 16 && dz >= 0 && dz < 16) {
-                int bState = ctx.boundaryStates[cacheIndex(dx, dy, dz)];
-                if (bState == 0 && dx == 15) {
-                    bState = ctx.boundaryStates[cacheIndex(16, dy, dz)];
-                }
-                if (bState == 0 && dz == 15) {
-                    bState = ctx.boundaryStates[cacheIndex(dx, dy, 16)];
-                }
+                int checkX = (dx == 15 && ctx.boundaryStates[cacheIndex(16, dy, dz)] != 0) ? 16 : dx;
+                int checkZ = (dz == 15 && ctx.boundaryStates[cacheIndex(checkX, dy, 16)] != 0) ? 16 : dz;
+                int bState = ctx.boundaryStates[cacheIndex(checkX, dy, checkZ)];
                 if (bState != 0) {
-                    return bState;
+                    IBlockState bs = (IBlockState) this.registry().id2state(bState);
+                    if (bs != null && bs.isOpaqueCube()) {
+                        return bState;
+                    }
                 }
             }
         }
 
         //upward-facing surfaces get the biome's top block (grass/sand/...) so far terrain has roughly correct colors,
         //  everything else is plain stone (we don't emulate replaceBiomeBlocks in detail).
-        //the raw density gradient points towards increasing density (downwards at a top surface),
-        //  so an upward-facing face has ny < 0.
-        if (ny < 0.0d) {
+        //edge is the face axis (0=X, 1=Y, 2=Z); the raw density gradient points towards increasing density (downwards
+        //  at a top surface), so an upward-facing face is a Y-axis face with ny < 0.
+        if (edge == 1 && ny < 0.0d) {
             Biome biome = (Biome) this.registry().id2biome(ctx.getBiome(blockX, blockZ));
             if (biome != null) {
                 IBlockState top = ((ATBiome1_12) biome).getTopBlock();

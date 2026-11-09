@@ -141,12 +141,16 @@ public abstract class AbstractChunksExactFBlockLevelHolder<CHUNK> extends Abstra
 
     @Override
     public boolean containsAnyData(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
+        if (minX >= maxX || minY >= maxY || minZ >= maxZ || maxY <= this.minHeight() || minY >= this.maxHeight()) {
+            return false;
+        }
+
         int minChunkX = minX >> this.chunkShift();
         int minChunkZ = minZ >> this.chunkShift();
-        int maxChunkX = (maxX >> this.chunkShift()) + 1; //rounded up because maximum positions are inclusive
-        int maxChunkZ = (maxZ >> this.chunkShift()) + 1;
+        int maxChunkX = (maxX - 1) >> this.chunkShift();
+        int maxChunkZ = (maxZ - 1) >> this.chunkShift();
 
-        return maxY >= this.minHeight() && minY < this.maxHeight() && this.chunksExistIndex.containsAny(minChunkX, minChunkZ, maxChunkX, maxChunkZ);
+        return this.chunksExistIndex.containsAny(minChunkX, minChunkZ, maxChunkX, maxChunkZ);
     }
 
     @Override

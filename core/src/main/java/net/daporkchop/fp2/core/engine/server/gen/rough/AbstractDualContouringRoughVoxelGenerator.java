@@ -135,19 +135,11 @@ public abstract class AbstractDualContouringRoughVoxelGenerator<PARAM> extends A
                             layer = min(max(layer0, layer1) - 1, 1);
                         }
 
-                        //compute averaged gradients in the current voxel on the chosen layer across all 4 parallel edges
-                        double d000 = densityMap[layer][diBase + CACHE_INDEX_ADD[0]];
-                        double d001 = densityMap[layer][diBase + CACHE_INDEX_ADD[1]];
-                        double d010 = densityMap[layer][diBase + CACHE_INDEX_ADD[2]];
-                        double d011 = densityMap[layer][diBase + CACHE_INDEX_ADD[3]];
-                        double d100 = densityMap[layer][diBase + CACHE_INDEX_ADD[4]];
-                        double d101 = densityMap[layer][diBase + CACHE_INDEX_ADD[5]];
-                        double d110 = densityMap[layer][diBase + CACHE_INDEX_ADD[6]];
-                        double d111 = densityMap[layer][diBase + CACHE_INDEX_ADD[7]];
-
-                        double nx = ((d100 - d000) + (d101 - d001) + (d110 - d010) + (d111 - d011)) * 0.25d;
-                        double ny = ((d010 - d000) + (d011 - d001) + (d110 - d100) + (d111 - d101)) * 0.25d;
-                        double nz = ((d001 - d000) + (d011 - d010) + (d101 - d100) + (d111 - d110)) * 0.25d;
+                        //compute gradients in the current voxel on the chosen layer
+                        double densityBase = densityMap[layer][diBase + CACHE_INDEX_ADD[0]];
+                        double nx = densityMap[layer][diBase + CACHE_INDEX_ADD[4]] - densityBase;
+                        double ny = densityMap[layer][diBase + CACHE_INDEX_ADD[2]] - densityBase;
+                        double nz = densityMap[layer][diBase + CACHE_INDEX_ADD[1]] - densityBase;
                         totalNx += nx;
                         totalNy += ny;
                         totalNz += nz;
@@ -186,7 +178,7 @@ public abstract class AbstractDualContouringRoughVoxelGenerator<PARAM> extends A
                     data.edges = edges;
 
                     //solve QEF and set the tile data
-                    qef.solve(vec, 0.1d, 4, 0.5d);
+                    qef.solve(vec, 0.1d, 1, 0.5d);
                     if (!(vec.x >= 0.0d && vec.x <= 1.0d
                             && vec.y >= 0.0d && vec.y <= 1.0d
                             && vec.z >= 0.0d && vec.z <= 1.0d)) { //ensure that all points are within voxel bounds, and catches NaN!

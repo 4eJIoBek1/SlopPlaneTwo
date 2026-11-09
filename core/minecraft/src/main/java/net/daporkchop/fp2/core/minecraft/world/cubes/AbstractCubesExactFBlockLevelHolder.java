@@ -133,12 +133,16 @@ public abstract class AbstractCubesExactFBlockLevelHolder<CUBE> extends Abstract
 
     @Override
     public boolean containsAnyData(int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
+        if (minX >= maxX || minY >= maxY || minZ >= maxZ) {
+            return false;
+        }
+
         int minCubeX = minX >> this.cubeShift();
         int minCubeY = minY >> this.cubeShift();
         int minCubeZ = minZ >> this.cubeShift();
-        int maxCubeX = (maxX >> this.cubeShift()) + 1; //rounded up because maximum positions are inclusive
-        int maxCubeY = (maxY >> this.cubeShift()) + 1;
-        int maxCubeZ = (maxZ >> this.cubeShift()) + 1;
+        int maxCubeX = (maxX - 1) >> this.cubeShift();
+        int maxCubeY = (maxY - 1) >> this.cubeShift();
+        int maxCubeZ = (maxZ - 1) >> this.cubeShift();
 
         return this.cubesExistIndex.containsAny(minCubeX, minCubeY, minCubeZ, maxCubeX, maxCubeY, maxCubeZ);
     }

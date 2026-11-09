@@ -194,12 +194,56 @@ public class VanillaRoughContext1_12 {
         int nodeCount = this.regionNX * this.regionNZ;
         this.depthShaped = ensureCapacity(this.depthShaped, nodeCount);
         int s = this.regionHStride;
-        double[] depthRaw = this.depthNoise.generateNoiseOctaves(
-                new double[nodeCount], this.regionGX0 / s, this.regionGZ0 / s, this.regionNX, this.regionNZ,
-                this.settings.depthNoiseScaleX * s, this.settings.depthNoiseScaleZ * s, this.settings.depthNoiseScaleExponent);
-        for (int i = 0; i < nodeCount; i++) {
-            this.depthShaped[i] = shapeDepth(depthRaw[i]);
+
+        if (level >= GTH_SHIFT) {
+            double[] depthRaw = this.depthNoise.generateNoiseOctaves(
+                    new double[nodeCount], Math.floorDiv(this.regionGX0, s), Math.floorDiv(this.regionGZ0, s), this.regionNX, this.regionNZ,
+                    this.settings.depthNoiseScaleX * s, this.settings.depthNoiseScaleZ * s, this.settings.depthNoiseScaleExponent);
+            for (int i = 0; i < nodeCount; i++) {
+                this.depthShaped[i] = shapeDepth(depthRaw[i]);
+            }
+        } else {
+            double[] depthRaw = this.depthNoise.generateNoiseOctaves(
+                    new double[nodeCount], this.regionGX0, this.regionGZ0, this.regionNX, this.regionNZ,
+                    this.settings.depthNoiseScaleX, this.settings.depthNoiseScaleZ, this.settings.depthNoiseScaleExponent);
+            for (int i = 0; i < nodeCount; i++) {
+                this.depthShaped[i] = shapeDepth(depthRaw[i]);
+            }
         }
+    }
+
+    /**
+     * Returns the estimated surface height for the given column in block coordinates.
+     * Evaluates in O(1) time without looping.
+     */
+    public double columnHeight(int blockX, int blockZ) {
+        if (this.columnHeights != null && this.columnHeights.length >= this.size * this.size) {
+            int nx = clamp((blockX - this.baseX) >> this.level, 0, this.size - 1);
+            int nz = clamp((blockZ - this.baseZ) >> this.level, 0, this.size - 1);
+            double h = this.columnHeights[nx * this.size + nz];
+            if (h > -500.0d) {
+                return h;
+            }
+        }
+
+        int colIdx;
+        if (this.level >= GTH_SHIFT) {
+            int nx = clamp((blockX - this.baseX) >> this.level, 0, this.size - 1);
+            int nz = clamp((blockZ - this.baseZ) >> this.level, 0, this.size - 1);
+            colIdx = nx * this.regionNZ + nz;
+        } else {
+            int nx = clamp(floorI((double) blockX / GTH_SIZE - this.regionGX0), 0, this.regionNX - 1);
+            int nz = clamp(floorI((double) blockZ / GTH_SIZE - this.regionGZ0), 0, this.regionNZ - 1);
+            colIdx = nx * this.regionNZ + nz;
+        }
+
+        if (colIdx >= 0 && colIdx < this.heights.length && colIdx < this.depthShaped.length) {
+            double height = (this.heights[colIdx] * 4.0d - 1.0d) / 8.0d;
+            double d8 = (height + this.depthShaped[colIdx] * 0.2d) * this.settings.baseSize / 8.0d;
+            double d0 = this.settings.baseSize + d8 * 4.0d;
+            return d0 * GTV_SIZE;
+        }
+        return 64.0d;
     }
 
     protected static double shapeDepth(double raw) {
@@ -427,16 +471,33 @@ public class VanillaRoughContext1_12 {
      * spacing. This replaces the raw density on coarse levels only, where the grid is too sparse to resolve the
      * strongly non-linear density profile.
      */
-    protected void fillHeightField(@NonNull double[] out, int minBlockY, int level, int size, double baseSize, double stretchY, double lowerScale, double upperScale) {
+    protected void computeColumnHeights(double baseSize, double stretchY, double lowerScale, double upperScale) {
+        int size = this.size;
+        int level = this.level;
         double[] heights = this.columnHeights = ensureCapacity(this.columnHeights, size * size);
-
         int lastNy = this.regionNY - 1;
+
         for (int dx = 0; dx < size; dx++) {
+            int nx0;
+            if (level >= GTH_SHIFT) {
+                nx0 = dx;
+            } else {
+                int blockX = this.baseX + (dx << level);
+                nx0 = clamp(floorI((double) blockX / GTH_SIZE - this.regionGX0), 0, this.regionNX - 1);
+            }
             for (int dz = 0; dz < size; dz++) {
+                int nz0;
+                if (level >= GTH_SHIFT) {
+                    nz0 = dz;
+                } else {
+                    int blockZ = this.baseZ + (dz << level);
+                    nz0 = clamp(floorI((double) blockZ / GTH_SIZE - this.regionGZ0), 0, this.regionNZ - 1);
+                }
+
                 int ny = lastNy;
-                double d0 = this.nodeDensity(dx, ny, dz, baseSize, stretchY, lowerScale, upperScale);
+                double d0 = this.nodeDensity(nx0, ny, nz0, baseSize, stretchY, lowerScale, upperScale);
                 while (d0 <= 0.0d && ny > 0) {
-                    d0 = this.nodeDensity(dx, --ny, dz, baseSize, stretchY, lowerScale, upperScale);
+                    d0 = this.nodeDensity(nx0, --ny, nz0, baseSize, stretchY, lowerScale, upperScale);
                 }
 
                 double h;
@@ -445,13 +506,18 @@ public class VanillaRoughContext1_12 {
                 } else if (ny == lastNy) {
                     h = (lastNy + 1) * GTV_SIZE;
                 } else {
-                    double d1 = this.nodeDensity(dx, ny + 1, dz, baseSize, stretchY, lowerScale, upperScale);
+                    double d1 = this.nodeDensity(nx0, ny + 1, nz0, baseSize, stretchY, lowerScale, upperScale);
                     double t = d0 - d1 > 0.0d ? d0 / (d0 - d1) : 0.0d;
                     h = (ny + t) * GTV_SIZE;
                 }
                 heights[dx * size + dz] = h;
             }
         }
+    }
+
+    protected void fillHeightField(@NonNull double[] out, int minBlockY, int level, int size, double baseSize, double stretchY, double lowerScale, double upperScale) {
+        this.computeColumnHeights(baseSize, stretchY, lowerScale, upperScale);
+        double[] heights = this.columnHeights;
 
         for (int i = 0, dx = 0; dx < size; dx++) {
             for (int dy = 0; dy < size; dy++) {
