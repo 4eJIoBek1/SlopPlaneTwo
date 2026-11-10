@@ -1,9 +1,12 @@
-# FarPlaneTwo
+# Far(Slop)PlaneTwo
 [![Build Status](https://jenkins.daporkchop.net/job/PorkStudios/job/FarPlaneTwo/job/master/badge/icon)](https://jenkins.daporkchop.net/job/PorkStudios/job/FarPlaneTwo/)
 ![GitHub code size in bytes](https://img.shields.io/github/languages/code-size/PorkStudios/FarPlaneTwo)
 ![Lines of code](https://img.shields.io/tokei/lines/github/PorkStudios/FarPlaneTwo)
 [![Discord](https://img.shields.io/discord/428813657816956929?color=7289DA&label=discord)](https://discord.gg/FrBHHCk)
 [![Patreon badge](https://img.shields.io/badge/dynamic/json?color=e64413&label=patreon&query=data.attributes.patron_count&suffix=%20patrons&url=https%3A%2F%2Fwww.patreon.com%2Fapi%2Fcampaigns%2F727078)](https://www.patreon.com/DaPorkchop_)
+
+<img width="1920" height="1009" alt="2026-11-10_23 07 21" src="https://github.com/user-attachments/assets/f9629dfb-3086-4c36-9355-d4e185d77436" />
+WIP, though vanilla 1.12.2 seems like works fine now
 
 This is a Minecraft mod which implements a Level-of-Detail (LoD) terrain renderer into the game.
 The name is in reference to [Foghrye4's CWGFarPlaneView](https://www.curseforge.com/minecraft/mc-mods/cwg-far-plane-view), which is an addon for CubicWorldGen (which, in turn, is an addon for Cubic Chunks) which renders a plane at sea level with block and biome colors, and served as the original inspiration for me to make this.
