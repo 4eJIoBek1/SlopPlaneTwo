@@ -260,15 +260,40 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
         }
 
         //upward-facing surfaces get the biome's top block (grass/sand/...) so far terrain has roughly correct colors,
-        //  everything else is plain stone (we don't emulate replaceBiomeBlocks in detail).
-        //edge is the face axis (0=X, 1=Y, 2=Z); the raw density gradient points towards increasing density (downwards
-        //  at a top surface), so an upward-facing face is a Y-axis face with ny < 0.
-        if (edge == 1 && ny < 0.0d) {
+        //  steep transitions get filler block (dirt/sandstone/...), and sheer cliffs/overhangs remain stone.
+        //the raw density gradient points towards increasing density (downwards into solid ground at a surface),
+        //  so an upward-exposed surface has ny < 0 (i.e. -ny > 0).
+        if (ny < 0.0d) {
             Biome biome = (Biome) this.registry().id2biome(ctx.getBiome(blockX, blockZ));
             if (biome != null) {
                 IBlockState top = ((ATBiome1_12) biome).getTopBlock();
-                if (top != null) {
-                    return this.registry().state2id(top);
+                IBlockState filler = ((ATBiome1_12) biome).getFillerBlock();
+
+                if (edge == 1) { //horizontal surface facing upward
+                    if (top != null) {
+                        return this.registry().state2id(top);
+                    } else if (filler != null) {
+                        return this.registry().state2id(filler);
+                    }
+                } else { //vertical surface (edge == 0 or 2, X or Z axis)
+                    double horizSq = nx * nx + nz * nz;
+                    double vert = -ny;
+                    double vertSq = vert * vert;
+
+                    if (vertSq >= 0.10d * horizSq) { //slopes up to ~72 degrees: normal terrain steps
+                        if (top != null) {
+                            return this.registry().state2id(top);
+                        } else if (filler != null) {
+                            return this.registry().state2id(filler);
+                        }
+                    } else if (vertSq >= 0.03d * horizSq) { //steep transition (~72 to ~80 degrees)
+                        if (filler != null) {
+                            return this.registry().state2id(filler);
+                        } else if (top != null) {
+                            return this.registry().state2id(top);
+                        }
+                    }
+                    //steeper than ~80 degrees: sheer vertical cliff, falls through to stone
                 }
             }
         }
