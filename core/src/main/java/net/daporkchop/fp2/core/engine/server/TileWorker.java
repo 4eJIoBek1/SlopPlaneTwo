@@ -43,6 +43,7 @@ import net.daporkchop.lib.primitive.list.array.LongArrayList;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -240,19 +241,40 @@ public class TileWorker implements SharedFutureScheduler.WorkFunction<PriorityTa
                 .filter(this.provider.coordLimits()::contains)
                 .collect(Collectors.toList());
 
-        //wait for all source tiles to be generated
-        this.scheduler.scatterGather(uniqueValidSourcePositions.stream()
-                .map(state.stage()::taskForPosition)
-                .collect(Collectors.toList()));
+        // Fast check: which input positions actually need to be generated or updated?
+        LongList timestamps = this.provider.storage().multiTimestamp(uniqueValidSourcePositions);
+        LongList dirtyTimestamps = state.stage() == TaskStage.UPDATE
+                ? this.provider.storage().multiDirtyTimestamp(uniqueValidSourcePositions)
+                : null;
+
+        List<PriorityTask> requiredTasks = new ArrayList<>();
+        for (int i = 0; i < uniqueValidSourcePositions.size(); i++) {
+            TilePos srcPos = uniqueValidSourcePositions.get(i);
+            long ts = timestamps.get(i);
+            if (ts == ITileMetadata.TIMESTAMP_BLANK || ts < ITileMetadata.TIMESTAMP_GENERATED) {
+                requiredTasks.add(TaskStage.LOAD.taskForPosition(srcPos));
+            } else if (dirtyTimestamps != null && dirtyTimestamps.get(i) != ITileMetadata.TIMESTAMP_BLANK) {
+                requiredTasks.add(TaskStage.UPDATE.taskForPosition(srcPos));
+            }
+        }
+
+        // Only schedule tasks for inputs that actually need work!
+        if (!requiredTasks.isEmpty()) {
+            this.scheduler.scatterGather(requiredTasks);
+        }
 
         if (state.considerExit()) {
             return;
         }
 
         //snapshot all tiles
-        Map<TilePos, ITileSnapshot> snapshotsByPosition = this.provider.storage().multiSnapshot(uniqueValidSourcePositions).stream()
-                .filter(Objects::nonNull)
-                .collect(Collectors.toMap(ITileSnapshot::pos, Function.identity(), (a, b) -> a));
+        List<ITileSnapshot> snapshots = this.provider.storage().multiSnapshot(uniqueValidSourcePositions);
+        Map<TilePos, ITileSnapshot> snapshotsByPosition = new HashMap<>(snapshots.size());
+        for (ITileSnapshot snapshot : snapshots) {
+            if (snapshot != null && snapshot.pos() != null) {
+                snapshotsByPosition.put(snapshot.pos(), snapshot);
+            }
+        }
 
         if (state.considerExit()) {
             return;

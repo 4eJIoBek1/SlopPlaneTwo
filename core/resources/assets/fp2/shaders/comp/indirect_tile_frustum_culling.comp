@@ -65,8 +65,8 @@ bool select(uint tileIndex) {
         return false;
     }
 
-    // Level-0 tiles must not overlap vanilla renderable terrain
-    if (pos.w == 0 && isVanillaRenderableLevel0(pos.xyz)) {
+    // Tiles must not overlap vanilla renderable terrain
+    if (isVanillaRenderable(pos)) {
         return false;
     }
 

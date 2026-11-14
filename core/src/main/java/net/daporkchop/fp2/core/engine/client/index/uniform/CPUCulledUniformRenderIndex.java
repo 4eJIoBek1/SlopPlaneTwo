@@ -170,9 +170,9 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
         //iterate over all the tile positions and draw commands
         this.allLocations.forEach((pos, commands) -> {
             int level = pos.level();
-            if ((level > 0 || !blockedTracker.renderingBlocked(pos.x(), pos.y(), pos.z()))
+            if (!blockedTracker.isTileBlocked(pos)
                 && frustum.intersectsBB(pos.minBlockX(), pos.minBlockY(), pos.minBlockZ(), pos.maxBlockX(), pos.maxBlockY(), pos.maxBlockZ())) {
-                this.selectedLocations[pos.level()].put(pos, commands);
+                this.selectedLocations[level].put(pos, commands);
             }
         });
     }

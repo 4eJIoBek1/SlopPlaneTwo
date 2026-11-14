@@ -262,10 +262,13 @@ public class SharedFutureScheduler<P, V> implements Scheduler<P, V>, Runnable {
             @Override
             public Task apply(@NonNull P param, Task task) {
                 if (task != expectedTask //tasks don't match, do nothing
-                    || task.refCnt < 0) { //task is currently being executed, we can't start executing it
+                    || task.refCnt < 0 //task is currently being executed, we can't start executing it
+                    || task.previous != null) { //previous task is still active, we can't start this one yet
                     if (DEBUG_PRINTS_ENABLED) {
                         if (task != expectedTask) {
                             fp2().log().info("begin: couldn't begin task at %s (mismatch)", param);
+                        } else if (task.previous != null) {
+                            fp2().log().info("begin: couldn't begin task at %s (previous still running)", param);
                         } else {
                             fp2().log().info("begin: couldn't begin task at %s (already executing)", param);
                         }

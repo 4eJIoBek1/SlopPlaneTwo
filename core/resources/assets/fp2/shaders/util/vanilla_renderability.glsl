@@ -68,3 +68,23 @@ bool isVanillaRenderableLevel0(in ivec3 chunkPos) {
     //extract the bit at the given index
     return (b_VanillaRenderability.flags[idx >> 5u] & (1u << idx)) != 0u;
 }
+
+bool isVanillaRenderable(in ivec4 tilePos) {
+    if (tilePos.w == 0) {
+        return isVanillaRenderableLevel0(tilePos.xyz);
+    } else if (tilePos.w == 1) {
+        ivec3 base = tilePos.xyz << 1;
+        for (int dx = 0; dx < 2; dx++) {
+            for (int dy = 0; dy < 2; dy++) {
+                for (int dz = 0; dz < 2; dz++) {
+                    if (isVanillaRenderableLevel0(base + ivec3(dx, dy, dz))) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+    return false;
+}
+
