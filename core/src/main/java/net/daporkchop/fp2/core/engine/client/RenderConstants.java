@@ -113,7 +113,11 @@ public class RenderConstants {
      */
     public static final int SHADER_PACK_XFB_ENTITY_OFFSET = SHADER_PACK_XFB_LIGHT_OFFSET + 4;
     /**
+     * The byte offset of the tangent vector attribute in a vertex captured by the shader pack compatibility transform feedback pass.
+     */
+    public static final int SHADER_PACK_XFB_TANGENT_OFFSET = SHADER_PACK_XFB_ENTITY_OFFSET + 4;
+    /**
      * The size of a vertex captured by the shader pack compatibility transform feedback pass, in bytes.
      */
-    public static final int SHADER_PACK_XFB_STRIDE = SHADER_PACK_XFB_ENTITY_OFFSET + 4;
+    public static final int SHADER_PACK_XFB_STRIDE = SHADER_PACK_XFB_TANGENT_OFFSET + 16;
 }

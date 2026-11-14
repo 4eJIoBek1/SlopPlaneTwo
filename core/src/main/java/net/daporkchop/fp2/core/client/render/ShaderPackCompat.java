@@ -50,6 +50,15 @@ public final class ShaderPackCompat {
         }
 
         /**
+         * Gets the index of the vertex attribute which the shader pack's programs read the tangent vector from ({@code at_tangent}).
+         *
+         * @return the attribute index, or {@code -1} if the pack's programs don't read such an attribute
+         */
+        default int tangentAttribute() {
+            return -1;
+        }
+
+        /**
          * Gets the block alias ID for water (block ID 9) to pass in mc_Entity.x.
          */
         default int waterBlockAliasId() {

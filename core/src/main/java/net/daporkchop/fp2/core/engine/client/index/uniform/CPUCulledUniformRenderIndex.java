@@ -473,6 +473,11 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
             if (entityAttribute >= 0) {
                 this.shaderPackCaptureAttribute(entityAttribute, 2, GL_SHORT, false, RenderConstants.SHADER_PACK_XFB_ENTITY_OFFSET); //mc_Entity
             }
+
+            int tangentAttribute = shaderPack.tangentAttribute();
+            if (tangentAttribute >= 0) {
+                this.shaderPackCaptureAttribute(tangentAttribute, 4, GL_FLOAT, false, RenderConstants.SHADER_PACK_XFB_TANGENT_OFFSET); //at_tangent
+            }
         } catch (Throwable t) {
             gl.glDeleteVertexArray(vao);
             throw t;

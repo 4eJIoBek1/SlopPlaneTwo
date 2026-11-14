@@ -58,6 +58,11 @@ public final class OFShaderPackRenderer1_12 implements ShaderPackCompat.Renderer
     }
 
     @Override
+    public int tangentAttribute() {
+        return OF_SHADERS_TANGENTATTRIB;
+    }
+
+    @Override
     public int waterBlockAliasId() {
         return of_BlockAliases_getBlockAliasId(9, 0);
     }
@@ -130,8 +135,8 @@ public final class OFShaderPackRenderer1_12 implements ShaderPackCompat.Renderer
      */
     private void setConstantAttributes() {
         //- mc_midTexCoord: unused, as long as the pack's parallax occlusion mapping and waving plants are disabled
-        //- at_tangent: a dummy unit tangent, used to build the TBN matrix
+        //- at_tangent: fallback orthogonal tangent in case vertex attribute array is disabled
         GL20.glVertexAttrib4f(OF_SHADERS_MIDTEXCOORDATTRIB, 0.0f, 0.0f, 0.0f, 0.0f);
-        GL20.glVertexAttrib4f(OF_SHADERS_TANGENTATTRIB, 1.0f, 0.0f, 0.0f, 1.0f);
+        GL20.glVertexAttrib4f(OF_SHADERS_TANGENTATTRIB, 0.7071f, 0.7071f, 0.0f, 1.0f);
     }
 }

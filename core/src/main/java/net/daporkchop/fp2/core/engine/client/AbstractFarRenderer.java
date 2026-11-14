@@ -101,7 +101,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
          * {@link RenderConstants}.
          */
         private static final String[] XFB_OUTPUT_VARIABLES = {
-                "xfb_pos", "xfb_colorNormal", "xfb_uv", "xfb_misc"
+                "xfb_pos", "xfb_colorNormal", "xfb_uv", "xfb_misc", "xfb_tangent"
         };
 
         final @NonNull FP2Config.Debug.DebugColorMode debugColorMode;
