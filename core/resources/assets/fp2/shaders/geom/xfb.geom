@@ -29,6 +29,7 @@
 // GEOMETRY SHADER-SPECIFIC CONFIGURATION
 //
 //
+//
 
 layout(triangles) in;
 layout(triangle_strip, max_vertices = 3) out;
@@ -36,6 +37,7 @@ layout(triangle_strip, max_vertices = 3) out;
 //
 //
 // OUTPUTS
+//
 //
 //
 
@@ -61,6 +63,7 @@ out vec4 xfb_tangent; //xyz = tangent vector, w = handedness (+1.0)
 // UNIFORMS
 //
 //
+//
 
 //the value of the mc_Entity vertex attribute (x = block id, y = block metadata). fp2 only stores a per-tile texture index in its vertex format, which can't
 //  be mapped back to a block state on the GPU, so the render pass provides a single value for all vertices instead.
@@ -71,6 +74,7 @@ uniform vec4 u_mcEntity;
 // CONSTANTS
 //
 //
+//
 
 //the vertex at which fp2's baked quad attributes are valid (the same convention which is used by the fragment shader path via flat interpolation)
 const int PROVOKING = 2;
@@ -78,6 +82,7 @@ const int PROVOKING = 2;
 //
 //
 // UTILITIES
+//
 //
 //
 
@@ -137,8 +142,20 @@ void main() {
     uint state = gs_in[PROVOKING].state;
 
     //get the texture data for the block face this triangle belongs to
-    TexQuadList list = stateAndFaceIndexToTexQuadList(state, normalToFaceIndex(normal));
+    uint upFace = normalToFaceIndex(vec3(0.0, 1.0, 0.0));
+    uint downFace = normalToFaceIndex(vec3(0.0, -1.0, 0.0));
+    uint faceIndex = normalToFaceIndex(normal);
+    TexQuadList list = stateAndFaceIndexToTexQuadList(state, faceIndex);
     PackedBakedQuad quad = quadIndexToQuad(list.first);
+
+    if (faceIndex != upFace && faceIndex != downFace) {
+        PackedBakedQuad topQuad = quadIndexToQuad(stateAndFaceIndexToTexQuadList(state, upFace).first);
+        PackedBakedQuad bottomQuad = quadIndexToQuad(stateAndFaceIndexToTexQuadList(state, downFace).first);
+        if ((list.last - list.first > 1u) || (topQuad.tint < 0.5 && bottomQuad.tint >= 0.5 && any(notEqual(topQuad.coords, bottomQuad.coords)))) {
+            quad = (normal.y >= 0.35) ? topQuad : bottomQuad;
+        }
+    }
+
     vec4 quadCoords = quad.coords;
 
     //compute the texture coordinates at each vertex. the texture origin is located at the provoking vertex.
@@ -159,6 +176,11 @@ void main() {
     vec2 maxCorner = max(vec2(0.0), oppRelFactor);
     vec2 span = max(maxCorner - minCorner, vec2(1.0));
 
+    // Inset sprite bounds by 1/32 of a sprite (~0.5 texel at 16x16) to prevent atlas bleeding at higher mip levels
+    vec2 uvInset = (quadCoords.pq - quadCoords.st) * (1.0 / 32.0);
+    vec2 safeMinUV = quadCoords.st + uvInset;
+    vec2 safeMaxUV = quadCoords.pq - uvInset;
+
     //fp2's vertex colors already contain ambient occlusion and the block's tint, we only need to apply the quad's texture tint.
     //Diffuse face shading must not be baked into vertex color: shader packs calculate their own lighting, and baking diffuse
     //into gl_Color causes shader packs (like SEUS) to mistakenly trigger legacy lighting fixes on steep cliffs.
@@ -177,7 +199,7 @@ void main() {
 
         xfb_pos = vec4(gs_in[i].pos, 1.0);
         xfb_colorNormal = uvec2(packedColor, packedNormal);
-        xfb_uv = mix(quadCoords.st, quadCoords.pq, clamp((factors[i] - factors[PROVOKING] - minCorner) / span, 0.0, 1.0));
+        xfb_uv = mix(safeMinUV, safeMaxUV, clamp((factors[i] - factors[PROVOKING] - minCorner) / span, 0.0, 1.0));
         xfb_misc = uvec2(packedLight, packedEntity);
         xfb_tangent = tangentOut;
 

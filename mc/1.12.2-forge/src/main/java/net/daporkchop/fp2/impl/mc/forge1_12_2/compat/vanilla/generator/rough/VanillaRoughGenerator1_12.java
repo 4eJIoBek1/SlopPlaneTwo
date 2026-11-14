@@ -269,32 +269,24 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
                 IBlockState top = ((ATBiome1_12) biome).getTopBlock();
                 IBlockState filler = ((ATBiome1_12) biome).getFillerBlock();
 
-                if (edge == 1) { //horizontal surface facing upward
+                double horizSq = nx * nx + nz * nz;
+                double vert = -ny;
+                double vertSq = vert * vert;
+
+                if (vertSq >= 0.85d * horizSq) { //gentle/moderate slopes up to ~47 degrees: biome topBlock (grass/sand)
                     if (top != null) {
                         return this.registry().state2id(top);
                     } else if (filler != null) {
                         return this.registry().state2id(filler);
                     }
-                } else { //vertical surface (edge == 0 or 2, X or Z axis)
-                    double horizSq = nx * nx + nz * nz;
-                    double vert = -ny;
-                    double vertSq = vert * vert;
-
-                    if (vertSq >= 0.10d * horizSq) { //slopes up to ~72 degrees: normal terrain steps
-                        if (top != null) {
-                            return this.registry().state2id(top);
-                        } else if (filler != null) {
-                            return this.registry().state2id(filler);
-                        }
-                    } else if (vertSq >= 0.03d * horizSq) { //steep transition (~72 to ~80 degrees)
-                        if (filler != null) {
-                            return this.registry().state2id(filler);
-                        } else if (top != null) {
-                            return this.registry().state2id(top);
-                        }
+                } else if (vertSq >= 0.10d * horizSq) { //hillside slopes (~47 to ~72 degrees): pure fillerBlock (dirt/sandstone)
+                    if (filler != null) {
+                        return this.registry().state2id(filler);
+                    } else if (top != null) {
+                        return this.registry().state2id(top);
                     }
-                    //steeper than ~80 degrees: sheer vertical cliff, falls through to stone
                 }
+                //steeper than ~72 degrees: sheer cliff, falls through to stone
             }
         }
 
