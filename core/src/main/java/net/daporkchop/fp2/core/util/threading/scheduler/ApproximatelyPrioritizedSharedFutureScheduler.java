@@ -33,7 +33,6 @@ import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -119,41 +118,8 @@ public class ApproximatelyPrioritizedSharedFutureScheduler<P, V> extends SharedF
             checkState(this.canRecurse(parent.param, task.param), "recursion from %s to %s is not permitted!", parent.param, task.param);
         }
 
-        if (task.isDone()) {
-            return;
-        }
-
-        if (this.beginTask(task)) {
-            this.executeTask(task);
-            return;
-        }
-
         while (!task.isDone()) {
-            if (!this.running) {
-                throw new SchedulerClosedError();
-            }
-
-            Task stolen = parent != null
-                    ? PorkUtil.<NavigableBlockingQueue<Task>>uncheckedCast(this.queue).pollLess(parent)
-                    : uncheckedCast(this.queue.poll());
-
-            if (stolen != null) {
-                if (this.beginTask(stolen)) {
-                    this.executeTask(stolen);
-                }
-            } else {
-                try {
-                    task.get(2L, TimeUnit.MILLISECONDS);
-                    return;
-                } catch (TimeoutException ignored) {
-                    // continue work stealing / checking isDone
-                } catch (InterruptedException e) {
-                    throw new SchedulerClosedError(e);
-                } catch (Exception ignored) {
-                    // task completed exceptionally or was cancelled; will exit next check
-                    return;
-                }
-            }
+            this.pollAndExecuteSingleTask();
         }
     }
 
@@ -162,7 +128,7 @@ public class ApproximatelyPrioritizedSharedFutureScheduler<P, V> extends SharedF
         Deque<SharedFutureScheduler<P, V>.Task> recursionStack = this.recursionStack.get();
         Task parent = uncheckedCast(recursionStack.peekFirst());
         if (parent != null) { //this is a recursive task! we should make sure that the task we get is less than the current one
-            return PorkUtil.<NavigableBlockingQueue<Task>>uncheckedCast(this.queue).pollLess(parent, 10L, TimeUnit.MILLISECONDS);
+            return PorkUtil.<NavigableBlockingQueue<Task>>uncheckedCast(this.queue).pollLess(parent, 1L, TimeUnit.SECONDS);
         } else {
             return super.pollSingleTask();
         }

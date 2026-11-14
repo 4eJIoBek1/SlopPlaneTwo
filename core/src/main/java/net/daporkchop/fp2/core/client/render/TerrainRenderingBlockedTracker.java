@@ -19,11 +19,9 @@
 
 package net.daporkchop.fp2.core.client.render;
 
-import lombok.NonNull;
 import lombok.val;
 import net.daporkchop.fp2.common.util.alloc.DirectMemoryAllocator;
 import net.daporkchop.fp2.core.client.FP2Client;
-import net.daporkchop.fp2.core.engine.TilePos;
 import net.daporkchop.fp2.gl.GLExtension;
 import net.daporkchop.fp2.gl.GLExtensionSet;
 import net.daporkchop.fp2.gl.OpenGL;
@@ -271,11 +269,10 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
                             }
 
                             //if the neighboring RenderChunk isn't baked, the current RenderChunk has at least one neighbor which isn't rendered and is therefore unable to block fp2 rendering.
-                            //DISABLED: do not unblock a ready chunk just because a neighbor is still compiling (CompiledChunk.DUMMY)
-                            //if ((neighborFlags & (FLAG_BAKED)) == 0) {
-                            //    out = false;
-                            //    break;
-                            //}
+                            if ((neighborFlags & (FLAG_BAKED)) == 0) {
+                                out = false;
+                                break;
+                            }
                         }
                     }
 
@@ -309,46 +306,6 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
         //this is carefully crafted so that HotSpot C2 on OpenJDK 8 on x86_64 can optimize this into just three instructions
         // by taking advantage of complex addressing
         return (PUnsafe.getInt(this.addr + FLAGS_OFFSET + ((long) idx >> 5 << 2)) & (1 << idx)) != 0;
-    }
-
-    /**
-     * Checks whether or not the given tile is blocked from rendering by vanilla terrain.
-     *
-     * @param level the tile's LOD level
-     * @param x     the tile's X coordinate
-     * @param y     the tile's Y coordinate
-     * @param z     the tile's Z coordinate
-     * @return whether or not vanilla terrain blocks this tile
-     */
-    public final boolean isTileBlocked(int level, int x, int y, int z) {
-        if (level == 0) {
-            return this.renderingBlocked(x, y, z);
-        } else if (level == 1) {
-            int bx = x << 1;
-            int by = y << 1;
-            int bz = z << 1;
-            for (int dx = 0; dx < 2; dx++) {
-                for (int dy = 0; dy < 2; dy++) {
-                    for (int dz = 0; dz < 2; dz++) {
-                        if (this.renderingBlocked(bx + dx, by + dy, bz + dz)) {
-                            return true;
-                        }
-                    }
-                }
-            }
-            return false;
-        }
-        return false;
-    }
-
-    /**
-     * Checks whether or not the given tile is blocked from rendering by vanilla terrain.
-     *
-     * @param pos the tile position
-     * @return whether or not vanilla terrain blocks this tile
-     */
-    public final boolean isTileBlocked(@NonNull TilePos pos) {
-        return this.isTileBlocked(pos.level(), pos.x(), pos.y(), pos.z());
     }
 
     /**

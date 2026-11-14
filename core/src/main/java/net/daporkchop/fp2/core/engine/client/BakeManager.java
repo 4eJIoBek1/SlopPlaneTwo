@@ -207,7 +207,7 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
             this.updateRenderable(pos,
                     pos.level() == 0 //level-0 tiles are always shown
                     || this.tileCache.getTileCached(pos) == null //if the tile isn't loaded, mark it as shown to prune unused entries from the render index's hidden set
-                    || pos.down().allPositionsInBB(0, 1).anyMatch(p -> this.coordLimits.contains(p) && this.tileCache.getTileCached(p) == null));
+                    || pos.down().allPositionsInBB(1, 3).anyMatch(p -> this.coordLimits.contains(p) && this.tileCache.getTileCached(p) == null));
         }
     }
 

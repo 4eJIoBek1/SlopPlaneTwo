@@ -96,27 +96,7 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
 
     @Override
     public List<TilePos> outputs(@NonNull TilePos srcPos) {
-        int x = srcPos.x();
-        int y = srcPos.y();
-        int z = srcPos.z();
-        int targetLevel = srcPos.level() + 1;
-
-        int x0 = (x & 1) == 0 ? (x >> 1) - 1 : (x >> 1);
-        int x1 = (x & 1) == 0 ? (x >> 1) : (x >> 1) + 1;
-        int y0 = (y & 1) == 0 ? (y >> 1) - 1 : (y >> 1);
-        int y1 = (y & 1) == 0 ? (y >> 1) : (y >> 1) + 1;
-        int z0 = (z & 1) == 0 ? (z >> 1) - 1 : (z >> 1);
-        int z1 = (z & 1) == 0 ? (z >> 1) : (z >> 1) + 1;
-
-        List<TilePos> out = new TilePosArrayList(8);
-        for (int dx = x0; dx <= x1; dx++) {
-            for (int dy = y0; dy <= y1; dy++) {
-                for (int dz = z0; dz <= z1; dz++) {
-                    out.add(new TilePos(targetLevel, dx, dy, dz));
-                }
-            }
-        }
-        return out;
+        return ImmutableList.of(srcPos.up());
     }
 
     @Override

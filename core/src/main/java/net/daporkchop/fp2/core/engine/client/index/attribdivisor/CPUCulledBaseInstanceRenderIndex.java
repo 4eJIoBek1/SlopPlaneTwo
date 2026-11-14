@@ -149,7 +149,7 @@ public class CPUCulledBaseInstanceRenderIndex<VertexType extends AttributeStruct
         this.selectedTilesCount = 0;
         this.drawCommands.forEach((pos, commands) -> {
             int level = pos.level();
-            if (!blockedTracker.isTileBlocked(pos)
+            if ((level > 0 || !blockedTracker.renderingBlocked(pos.x(), pos.y(), pos.z()))
                 && frustum.intersectsBB(pos.minBlockX(), pos.minBlockY(), pos.minBlockZ(), pos.maxBlockX(), pos.maxBlockY(), pos.maxBlockZ())) {
                 //the tile is in the frustum, add all the draw commands to the corresponding draw lists
                 this.selectedTilesCount++;
