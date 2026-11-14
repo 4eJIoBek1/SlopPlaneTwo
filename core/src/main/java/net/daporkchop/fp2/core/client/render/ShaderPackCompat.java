@@ -57,6 +57,20 @@ public final class ShaderPackCompat {
         }
 
         /**
+         * Gets the block alias ID for solid terrain (block ID 1, stone) to pass in mc_Entity.x.
+         */
+        default int solidBlockAliasId() {
+            return 1;
+        }
+
+        /**
+         * Gets the block alias ID for cutout foliage/leaves (block ID 18, oak leaves) to pass in mc_Entity.x.
+         */
+        default int cutoutBlockAliasId() {
+            return 18;
+        }
+
+        /**
          * Checks whether the pack's water shader program is available.
          * <p>
          * If it isn't, the translucent parts of the far terrain are drawn using the pack's regular terrain program instead (as opaque geometry), as drawing

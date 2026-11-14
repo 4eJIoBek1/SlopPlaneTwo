@@ -63,6 +63,16 @@ public final class OFShaderPackRenderer1_12 implements ShaderPackCompat.Renderer
     }
 
     @Override
+    public int solidBlockAliasId() {
+        return of_BlockAliases_getBlockAliasId(1, 0);
+    }
+
+    @Override
+    public int cutoutBlockAliasId() {
+        return of_BlockAliases_getBlockAliasId(18, 0);
+    }
+
+    @Override
     public boolean hasWaterProgram() {
         return of_Shaders_programWaterId() > 0;
     }

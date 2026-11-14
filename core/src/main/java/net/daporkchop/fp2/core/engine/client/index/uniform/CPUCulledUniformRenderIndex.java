@@ -303,9 +303,20 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
         //shader packs use the mc_Entity attribute to detect special blocks. fp2's vertex format only stores a per-tile texture index, which can't be mapped
         //  back to a block state on the GPU, so a constant value is used for all vertices of a pass instead. the translucent pass only ever contains water,
         //  which is identified by its block id (8/9, as used by Chocapic13) as well as by a metadata value of 1 (as used by SEUS).
-        boolean water = pass == RenderConstants.LAYER_TRANSPARENT;
-        float mcEntityX = water ? (float) shaderPack.waterBlockAliasId() : 0.0f;
-        float mcEntityY = water ? 1.0f : 0.0f;
+        //  for the solid pass, we pass the block alias for stone (block id 1) so shader packs like SEUS don't misclassify smooth/sloped terrain
+        //  geometry as cross-model grass foliage via their non-axis-aligned normal heuristic (GENERAL_GRASS_FIX).
+        float mcEntityX;
+        float mcEntityY;
+        if (pass == RenderConstants.LAYER_TRANSPARENT) {
+            mcEntityX = (float) shaderPack.waterBlockAliasId();
+            mcEntityY = 1.0f;
+        } else if (pass == RenderConstants.LAYER_CUTOUT) {
+            mcEntityX = (float) shaderPack.cutoutBlockAliasId();
+            mcEntityY = 0.0f;
+        } else {
+            mcEntityX = (float) shaderPack.solidBlockAliasId();
+            mcEntityY = 0.0f;
+        }
 
         //save the state which we're going to modify. the shader pack's program is bound by the caller, and needs to be restored after every capture.
         int packProgram = gl.glGetInteger(GL_CURRENT_PROGRAM);
