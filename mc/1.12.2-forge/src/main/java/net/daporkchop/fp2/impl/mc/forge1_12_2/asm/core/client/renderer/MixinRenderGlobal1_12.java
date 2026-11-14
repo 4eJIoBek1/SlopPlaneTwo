@@ -103,6 +103,9 @@ abstract class MixinRenderGlobal1_12 implements IMixinRenderGlobal1_12 {
                             args = "ldc=captureFrustum")),
             require = 1, allow = 1)
     private void fp2_setupTerrain_updateVanillaRenderability(Entity viewEntity, double partialTicks, ICamera camera, int frameCount, boolean playerSpectator, CallbackInfo ci) {
+        if (of_Shaders_isShadowPass()) {
+            return;
+        }
         this.mc.profiler.startSection("fp2_vanillaRenderabilityTracker_update");
         this.fp2_vanillaRenderabilityTracker.update(uncheckedCast(this), camera, frameCount);
         this.mc.profiler.endSection();
@@ -181,6 +184,26 @@ abstract class MixinRenderGlobal1_12 implements IMixinRenderGlobal1_12 {
 
         GL11.glDisable(GL11.GL_STENCIL_TEST);
         GlStateManager.depthMask(false);
+    }
+
+    @Inject(method = "Lnet/minecraft/client/renderer/RenderGlobal;renderBlockLayer(Lnet/minecraft/util/BlockRenderLayer;DILnet/minecraft/entity/Entity;)I",
+            at = @At(value = "RETURN"),
+            require = 1, allow = 2)
+    private void fp2_renderBlockLayer_afterCutoutShadow(BlockRenderLayer layer, double partialTicks, int pass, Entity entityIn, CallbackInfoReturnable<Integer> cir) {
+        if (layer != BlockRenderLayer.CUTOUT || !of_Shaders_isShadowPass()) {
+            return;
+        }
+
+        fp2().client().currentPlayer().ifPresent(player -> {
+            IFarClientContext context = player.activeContext();
+            AbstractFarRenderer renderer;
+            if (context != null && (renderer = context.renderer()) != null) {
+                this.mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
+                ((ATMinecraft1_12) this.mc).getTextureMapBlocks().setBlurMipmapDirect(false, this.mc.gameSettings.mipmapLevels > 0);
+                renderer.render(((IMixinEntityRenderer1_12) this.mc.entityRenderer).fp2_cameraState(), ((IMixinEntityRenderer1_12) this.mc.entityRenderer).fp2_drawState());
+                ((ATMinecraft1_12) this.mc).getTextureMapBlocks().restoreLastBlurMipmap();
+            }
+        });
     }
 
     @Override

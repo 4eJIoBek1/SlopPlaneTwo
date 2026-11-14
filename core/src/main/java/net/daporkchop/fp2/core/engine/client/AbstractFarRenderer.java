@@ -467,7 +467,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
             if (shaderPack != null && shaderPack.isShadowPass()) {
                 //the shader pack's shadow area only covers a small part of the world around the player, which is entirely covered by the finest detail
                 //  level. the rest of the far terrain would have to be captured and drawn a second time without contributing any visible shadows, so skip it.
-                drawableMask = drawableMask.copyOfLevelRange(drawableMask.minLevelToDraw(), Math.min(drawableMask.minLevelToDraw() + 1, EngineConstants.MAX_LODS));
+                drawableMask = drawableMask.copyOfLevelRange(0, Math.min(3, EngineConstants.MAX_LODS));
             }
         }
 
@@ -519,17 +519,21 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
             if (drawableMask.shouldDrawAnythingForLayer(RenderConstants.LAYER_TRANSPARENT)) {
                 ShaderPackCompat.Renderer shaderPack = ShaderPackCompat.isActive() ? ShaderPackCompat.renderer() : null;
                 if (shaderPack != null && shaderPack.hasWaterProgram()) {
-                    //a shader pack is active: the translucent pass must be rendered through the pack's water shader program, which only becomes active
-                    //  during the vanilla translucent render pass. defer it to renderShaderPackWater(), which will be called from there.
-                    this.shaderPackWaterCameraState = cameraState;
-                    this.shaderPackXfbShaderProgram = capturedShaderPrograms.xfbShaderProgram;
+                    if (!shaderPack.isShadowPass()) {
+                        //a shader pack is active: the translucent pass must be rendered through the pack's water shader program, which only becomes active
+                        //  during the vanilla translucent render pass. defer it to renderShaderPackWater(), which will be called from there.
+                        this.shaderPackWaterCameraState = cameraState;
+                        this.shaderPackXfbShaderProgram = capturedShaderPrograms.xfbShaderProgram;
+                    }
                 } else if (shaderPack != null) {
-                    //the pack doesn't have a usable water shader program (e.g. Optifine's "(internal)" pack, which has no shader sources at all), so draw the
-                    //  translucent geometry as part of the regular opaque pass instead - there is no point in deferring it to the water pass, as there would be
-                    //  no program to draw it with
-                    for (int level = drawableMask.minLevelToDraw(); level < drawableMask.maxLevelToDraw(); level++) {
-                        if (drawableMask.shouldDrawAnythingForLevelLayer(level, RenderConstants.LAYER_TRANSPARENT)) {
-                            this.renderShaderPackTransparent(drawArguments, capturedShaderPrograms, level);
+                    if (!shaderPack.isShadowPass()) {
+                        //the pack doesn't have a usable water shader program (e.g. Optifine's "(internal)" pack, which has no shader sources at all), so draw the
+                        //  translucent geometry as part of the regular opaque pass instead - there is no point in deferring it to the water pass, as there would be
+                        //  no program to draw it with
+                        for (int level = drawableMask.minLevelToDraw(); level < drawableMask.maxLevelToDraw(); level++) {
+                            if (drawableMask.shouldDrawAnythingForLevelLayer(level, RenderConstants.LAYER_TRANSPARENT)) {
+                                this.renderShaderPackTransparent(drawArguments, capturedShaderPrograms, level);
+                            }
                         }
                     }
                 } else {
@@ -647,7 +651,6 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
         this.gl.glBindBufferBase(GL_UNIFORM_BUFFER, RenderConstants.DRAW_STATE_UNIFORMS_UBO_BINDING, this.drawStateUniformsBuffer.buffer().id());
 
         this.gl.glEnable(GL_DEPTH_TEST);
-        this.gl.glDepthFunc(drawArguments.reversedZ ? GL_GREATER : GL_LESS);
 
         //bind texture UVs
         this.levelRenderer.textureUVs().gpuQuadLists().bind(this.gl);
@@ -656,12 +659,19 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
             this.gl.glEnable(GL_CULL_FACE);
         }
 
-        this.gl.glEnable(GL_STENCIL_TEST);
-        this.gl.glStencilMask(0xFF);
+        boolean shadowPass = ShaderPackCompat.isActive() && ShaderPackCompat.renderer().isShadowPass();
+        if (shadowPass) {
+            this.gl.glDisable(GL_STENCIL_TEST);
+            this.gl.glDepthFunc(GL_LEQUAL);
+        } else {
+            this.gl.glDepthFunc(drawArguments.reversedZ ? GL_GREATER : GL_LESS);
+            this.gl.glEnable(GL_STENCIL_TEST);
+            this.gl.glStencilMask(0xFF);
 
-        //clear stencil buffer to 0x7F
-        this.gl.glClearStencil(0x7F);
-        this.gl.glClear(GL_STENCIL_BUFFER_BIT);
+            //clear stencil buffer to 0x7F
+            this.gl.glClearStencil(0x7F);
+            this.gl.glClear(GL_STENCIL_BUFFER_BIT);
+        }
     }
 
     private void postRender(RenderIndex.DrawArguments drawArguments) {
@@ -671,8 +681,11 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
     private void renderSolid(RenderIndex.DrawArguments drawArguments, CapturedShaderPrograms capturedShaderPrograms, int level) {
         //GlStateManager.disableAlpha();
 
-        this.gl.glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-        this.gl.glStencilFunc(GL_LEQUAL, level, 0x7F);
+        boolean shadowPass = ShaderPackCompat.isActive() && ShaderPackCompat.renderer().isShadowPass();
+        if (!shadowPass) {
+            this.gl.glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+            this.gl.glStencilFunc(GL_LEQUAL, level, 0x7F);
+        }
 
         val shader = capturedShaderPrograms.blockShaderProgram;
         val uniformSetter = shader.bindUnsafe();
@@ -684,8 +697,11 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
     private void renderCutout(RenderIndex.DrawArguments drawArguments, CapturedShaderPrograms capturedShaderPrograms, int level) {
         //MC.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE).setBlurMipmap(false, MC.gameSettings.mipmapLevels > 0);
 
-        this.gl.glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-        this.gl.glStencilFunc(GL_LEQUAL, level, 0x7F);
+        boolean shadowPass = ShaderPackCompat.isActive() && ShaderPackCompat.renderer().isShadowPass();
+        if (!shadowPass) {
+            this.gl.glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
+            this.gl.glStencilFunc(GL_LEQUAL, level, 0x7F);
+        }
 
         val shader = capturedShaderPrograms.blockCutoutShaderProgram;
         val uniformSetter = shader.bindUnsafe();

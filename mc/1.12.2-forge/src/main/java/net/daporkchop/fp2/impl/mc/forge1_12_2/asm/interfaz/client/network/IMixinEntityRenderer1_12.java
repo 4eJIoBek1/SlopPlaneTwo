@@ -20,12 +20,15 @@
 package net.daporkchop.fp2.impl.mc.forge1_12_2.asm.interfaz.client.network;
 
 import net.daporkchop.fp2.core.client.render.state.CameraState;
+import net.daporkchop.fp2.core.client.render.state.DrawState;
 
 /**
  * @author DaPorkchop_
  */
 public interface IMixinEntityRenderer1_12 {
     CameraState fp2_cameraState();
+
+    DrawState fp2_drawState();
 
     /**
      * Re-reads the current camera position and matrices from the renderer state.

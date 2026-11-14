@@ -168,8 +168,8 @@ abstract class MixinEntityRenderer1_12 implements IMixinEntityRenderer1_12 {
         }
     }
 
-    @Unique
-    private DrawState fp2_drawState() {
+    @Override
+    public DrawState fp2_drawState() {
         DrawState drawState = new DrawState();
 
         //optifine compatibility: disable fog if it's turned off, because optifine only does this itself if no vanilla terrain is being rendered
