@@ -142,19 +142,8 @@ void main() {
     uint state = gs_in[PROVOKING].state;
 
     //get the texture data for the block face this triangle belongs to
-    uint upFace = normalToFaceIndex(vec3(0.0, 1.0, 0.0));
-    uint downFace = normalToFaceIndex(vec3(0.0, -1.0, 0.0));
-    uint faceIndex = normalToFaceIndex(normal);
-    TexQuadList list = stateAndFaceIndexToTexQuadList(state, faceIndex);
+    TexQuadList list = stateAndFaceIndexToTexQuadList(state, normalToFaceIndex(normal));
     PackedBakedQuad quad = quadIndexToQuad(list.first);
-
-    if (faceIndex != upFace && faceIndex != downFace) {
-        PackedBakedQuad topQuad = quadIndexToQuad(stateAndFaceIndexToTexQuadList(state, upFace).first);
-        PackedBakedQuad bottomQuad = quadIndexToQuad(stateAndFaceIndexToTexQuadList(state, downFace).first);
-        if ((list.last - list.first > 1u) || (topQuad.tint < 0.5 && bottomQuad.tint >= 0.5 && any(notEqual(topQuad.coords, bottomQuad.coords)))) {
-            quad = (normal.y >= 0.35) ? topQuad : bottomQuad;
-        }
-    }
 
     vec4 quadCoords = quad.coords;
 
@@ -182,9 +171,15 @@ void main() {
     vec2 safeMaxUV = quadCoords.pq - uvInset;
 
     //fp2's vertex colors already contain ambient occlusion and the block's tint, we only need to apply the quad's texture tint.
-    //Diffuse face shading must not be baked into vertex color: shader packs calculate their own lighting, and baking diffuse
-    //into gl_Color causes shader packs (like SEUS) to mistakenly trigger legacy lighting fixes on steep cliffs.
-    vec3 vertexColor = max(gs_in[PROVOKING].color, vec3(quad.tint));
+    //the per-face diffuse shading is baked into the vertex color as well, exactly like vanilla does it (see
+    //BlockModelRenderer#renderQuadsSmooth, which multiplies the vertex color by LightUtil.diffuseLight(face)).
+    //without this, the far terrain is significantly brighter than the vanilla chunks around it when a shader pack is
+    //active (the pack computes its own lighting on top of the albedo), while fp2's own shader path (which does apply
+    //the diffuse) looks correct.
+    //note that this has nothing to do with shader packs' "general grass fix" heuristics (e.g. SEUS Renewed's
+    //GENERAL_GRASS_FIX in gbuffers_terrain.vsh), which are triggered by non-axis-aligned normals, not by the
+    //vertex color.
+    vec3 vertexColor = max(gs_in[PROVOKING].color, vec3(quad.tint)) * diffuseLight(normal);
 
     //pack the values which are constant for the whole triangle
     uint packedColor = packUnorm8(vertexColor.r) | (packUnorm8(vertexColor.g) << 8) | (packUnorm8(vertexColor.b) << 16) | (255u << 24);
@@ -194,8 +189,10 @@ void main() {
     vec4 tangentOut = computeTangent(normal, factors[0], factors[1], factors[2]);
 
     for (int i = 0; i < 3; i++) {
-        //fp2 stores the lightmap coordinates normalized, but vanilla (and shader packs) use the 0-255 range
-        uint packedLight = packUnorm8(gs_in[i].light.x) | (packUnorm8(gs_in[i].light.y) << 16);
+        //fp2 stores the lightmap coordinates normalized, but vanilla (and shader packs) use the 0-255 range.
+        //vanilla actually emits 0..240; match it so packs' lmcoord math agrees with vanilla chunks
+        uint packedLight = packUnorm8(gs_in[i].light.x * (240.0 / 255.0))
+                         | (packUnorm8(gs_in[i].light.y * (240.0 / 255.0)) << 16);
 
         xfb_pos = vec4(gs_in[i].pos, 1.0);
         xfb_colorNormal = uvec2(packedColor, packedNormal);
