@@ -68,10 +68,64 @@ public abstract class AbstractDualContouringRoughVoxelGenerator<PARAM> extends A
         return typeMap;
     }
 
+    /**
+     * Separates shallow submerged seabeds from the water surface when both cross zero on the same vertical grid edge.
+     * <p>
+     * In dual contouring, each voxel edge can represent at most one surface. When a vertical edge transitions directly
+     * from {@code solid+liquid} (layer 3) to {@code air} (layer 0) and the water surface is higher than the terrain
+     * surface, {@link #dualContour} has to emit water on that edge, which would otherwise drop the seabed completely and
+     * expose the sky behind shallow water (breaking both vanilla translucency and shader-pack water depth fog).
+     * <p>
+     * Pushing the solid density at the lower node slightly negative (when solid ground exists at {@code y - 1}) turns
+     * that node into {@code liquid}-only (layer 1), keeping the water surface on {@code [y, y+1]} while moving the seabed
+     * continuously onto {@code [y-1, y]} directly underneath (and stitching it to dry shores via horizontal {@code 1 <-> 3}
+     * edges). Only strictly interior {@code y} indices ({@code 1 .. T_VOXELS - 1}) are adjusted so vertical tile boundaries
+     * ({@code y = 0} / {@code y = T_VOXELS}) always agree across adjacent tiles and horizontal boundaries match identically.
+     */
+    protected void separateShallowWaterFromSeabed(@NonNull double[][] densityMap) {
+        double[] water = densityMap[0];
+        double[] block = densityMap[1];
+
+        checkArg(water.length >= cb(CACHE_SIZE) && block.length >= cb(CACHE_SIZE));
+
+        for (int x = 0; x <= T_VOXELS; x++) {
+            for (int y = 1; y < T_VOXELS; y++) {
+                int rowBase = cacheIndex(x, y, 0);
+                for (int z = 0; z <= T_VOXELS; z++) {
+                    int idx = rowBase + z;
+                    double w0 = water[idx];
+                    if (w0 <= 0.0d) {
+                        continue;
+                    }
+                    double w1 = water[idx + CACHE_SIZE];
+                    if (w1 > 0.0d) {
+                        continue;
+                    }
+
+                    double b0 = block[idx];
+                    if (b0 <= 0.0d) {
+                        continue;
+                    }
+                    double b1 = block[idx + CACHE_SIZE];
+                    if (b1 > 0.0d) {
+                        continue;
+                    }
+
+                    if (minimize(w0, w1) > minimize(b0, b1) && block[idx - CACHE_SIZE] > 0.0d) {
+                        block[idx] = -1e-4d;
+                    }
+                }
+            }
+        }
+    }
+
     protected void dualContour(int baseX, int baseY, int baseZ, int level, Tile tile, double[][] densityMap, PARAM param) {
         QefSolver qef = new QefSolver();
         TileData data = new TileData();
         Vector3d vec = new Vector3d();
+
+        //push shallow submerged seabed crossings down one cell so water and seabed don't collide on the same vertical edge
+        this.separateShallowWaterFromSeabed(densityMap);
 
         //use bit flags to identify voxel types rather than reading from the density map each time to keep innermost loop head tight and cache-friendly
         byte[] tMap = this.populateTypeMapFromDensityMap(densityMap);

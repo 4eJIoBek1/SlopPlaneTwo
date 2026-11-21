@@ -112,9 +112,6 @@ public final class OFShaderPackRenderer1_12 implements ShaderPackCompat.Renderer
             } else {
                 of_ShadersRender_beginTerrainSolid();
             }
-
-            GL11.glEnable(GL11.GL_POLYGON_OFFSET_FILL);
-            GL11.glPolygonOffset(1.0f, 2.0f);
         }
 
         if (pass == RenderConstants.LAYER_CUTOUT) {
@@ -129,10 +126,7 @@ public final class OFShaderPackRenderer1_12 implements ShaderPackCompat.Renderer
 
     @Override
     public void endPass(int level, int pass) {
-        if (!this.isShadowPass()) {
-            GL11.glDisable(GL11.GL_POLYGON_OFFSET_FILL);
-            GL11.glPolygonOffset(0.0f, 0.0f);
-        }
+        //no-op
     }
 
     @Override
