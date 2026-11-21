@@ -152,6 +152,8 @@ public abstract class AbstractDualContouringRoughVoxelGenerator<PARAM> extends A
 
                     //populate the QEF with data
                     qef.reset();
+                    double waterYSum = 0.0d;
+                    int waterYCount = 0;
                     int edgeCount = 0;
                     int edges = 0;
                     for (int edge = 0; edge < QEF_EDGE_COUNT; edge++) {
@@ -207,6 +209,11 @@ public abstract class AbstractDualContouringRoughVoxelGenerator<PARAM> extends A
                         double px = lerp((c0 >> 2) & 1, (c1 >> 2) & 1, t);
                         double py = lerp((c0 >> 1) & 1, (c1 >> 1) & 1, t);
                         double pz = lerp(c0 & 1, c1 & 1, t);
+                        if (layer == 0 && (edge >> 2) == 1) {
+                            //vertical water surface edge (QEF_EDGE_VERTEX_MAP edges 4..7)
+                            waterYSum += py;
+                            waterYCount++;
+                        }
 
                         //add the edge crossing point to the QEF
                         qef.add(px, py, pz, nx, ny, nz);
@@ -238,6 +245,11 @@ public abstract class AbstractDualContouringRoughVoxelGenerator<PARAM> extends A
                             && vec.z >= 0.0d && vec.z <= 1.0d)) { //ensure that all points are within voxel bounds, and catches NaN!
                         //if not, fall back to the mass point (basically the average position of all edge intersections), which is basically guaranteed to be within the voxel bounds
                         vec.set(qef.massPoint().x, qef.massPoint().y, qef.massPoint().z);
+                    }
+                    if (waterYCount > 0) {
+                        //keep every voxel touching a vertical water surface edge strictly on the water plane so shoreline water
+                        //  quads remain perfectly horizontal (normal = (0, 1, 0)) instead of tilting toward the shore QEF
+                        vec.y = waterYSum / waterYCount;
                     }
 
                     data.x = clamp(floorI(vec.x * POS_ONE), 0, POS_ONE);

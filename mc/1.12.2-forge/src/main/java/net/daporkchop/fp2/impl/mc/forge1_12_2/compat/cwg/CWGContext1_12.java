@@ -357,16 +357,22 @@ public class CWGContext1_12 {
             //generate 3d noise at low resolution
             this.configuredNoiseGen.generate3d(this.heights, this.variations, this.depth, tmp, this.cacheBaseX, cacheBaseY, this.cacheBaseZ, GTH_SIZE, GTV_SIZE, GTH_SIZE, this.cacheSize, cacheHeight, this.cacheSize);
 
-            //resample noise values
-            double scaleH = 1.0d / (1 << (GTH_SHIFT - this.level));
-            double scaleV = 1.0d / (1 << (GTV_SHIFT - this.level));
+            //resample noise values from the native 4x8x4 grid (origin cacheBaseX/Y/Z, step GTH_SIZE/GTV_SIZE/GTH_SIZE)
+            double scaleH = 1.0d / GTH_SIZE;
+            double scaleV = 1.0d / GTV_SIZE;
+            int offsetX = this.baseX - this.cacheBaseX;
+            int offsetY = baseY - cacheBaseY;
+            int offsetZ = this.baseZ - this.cacheBaseZ;
 
-            Grid3d grid = Grid3d.of(tmp, this.cacheBaseX >> (GTH_SHIFT - this.level), cacheBaseY >> (GTV_SHIFT - this.level), this.cacheBaseZ >> (GTH_SHIFT - this.level), this.cacheSize, cacheHeight, this.cacheSize);
+            Grid3d grid = Grid3d.of(tmp, 0, 0, 0, this.cacheSize, cacheHeight, this.cacheSize);
             Interpolation interp = new LinearInterpolation();
             for (int i = 0, dx = 0; dx < this.size; dx++) {
+                double gx = (offsetX + (dx << this.level)) * scaleH;
                 for (int dy = 0; dy < this.size; dy++) {
+                    double gy = (offsetY + (dy << this.level)) * scaleV;
                     for (int dz = 0; dz < this.size; dz++, i++) {
-                        out[i] = interp.getInterpolated((this.baseX + dx) * scaleH, (baseY + dy) * scaleV, (this.baseZ + dz) * scaleH, grid);
+                        double gz = (offsetZ + (dz << this.level)) * scaleH;
+                        out[i] = interp.getInterpolated(gx, gy, gz, grid);
                     }
                 }
             }

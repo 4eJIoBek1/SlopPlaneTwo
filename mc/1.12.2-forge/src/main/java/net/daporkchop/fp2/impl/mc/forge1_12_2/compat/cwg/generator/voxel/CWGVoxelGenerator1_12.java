@@ -92,8 +92,19 @@ public class CWGVoxelGenerator1_12 extends AbstractDualContouringRoughVoxelGener
         }
 
         double density = max(density0, density1);
+        int biomeId = ctx.getBiome(blockX, blockZ);
 
-        IBlockState state = ctx.getReplacedBlockInBiome(ctx.getBiome(blockX, blockZ), blockX, blockY, blockZ, nx, ny, nz, density);
+        IBlockState state = ctx.getReplacedBlockInBiome(biomeId, blockX, blockY, blockZ, nx, ny, nz, density);
+        if (state == null || state.getMaterial().isLiquid() || !state.getMaterial().isSolid()) {
+            //CWG's MainSurfaceReplacer returns AIR when surface depth noise <= 0 (meaning "strip the top block and expose
+            //  the underlying stone/terracotta"), and v7's swamp NoiseBasedSurfaceDecoration can return WATER or WATERLILY.
+            //  emitting a non-solid or liquid block on a solid face renders as missingno (or fake water), so re-query
+            //  one block deeper to pick up the preset's underlying rock.
+            state = ctx.getReplacedBlockInBiome(biomeId, blockX, blockY - 1, blockZ, nx, ny, nz, density + abs(ny) + 1.0d);
+            if (state == null || state.getMaterial().isLiquid() || !state.getMaterial().isSolid()) {
+                state = Blocks.STONE.getDefaultState();
+            }
+        }
 
         return this.registry().state2id(state);
     }
