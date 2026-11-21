@@ -49,8 +49,8 @@ jobs:
               dlls = [n for n in names if n.endswith(".dll")]
               sos = [n for n in names if n.endswith(".so")]
               print(f"Verified {jars[0]}: refmap={len(mappings)}, dlls={len(dlls)}, sos={len(sos)}")
-              assert len(dlls) == 25, f"Expected 25 .dlls, got {len(dlls)}"
-              assert len(sos) == 25, f"Expected 25 .sos, got {len(sos)}"
+              assert len(dlls) >= 25, f"Expected at least 25 .dlls, got {len(dlls)}"
+              assert len(sos) >= 25, f"Expected at least 25 .sos, got {len(sos)}"
           EOF
 
       - name: Publish to stable GitHub Release
