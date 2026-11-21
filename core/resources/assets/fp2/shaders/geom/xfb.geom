@@ -29,7 +29,6 @@
 // GEOMETRY SHADER-SPECIFIC CONFIGURATION
 //
 //
-//
 
 layout(triangles) in;
 layout(triangle_strip, max_vertices = 3) out;
@@ -37,7 +36,6 @@ layout(triangle_strip, max_vertices = 3) out;
 //
 //
 // OUTPUTS
-//
 //
 //
 
@@ -63,16 +61,16 @@ out vec4 xfb_tangent; //xyz = tangent vector, w = handedness (+1.0)
 // UNIFORMS
 //
 //
-//
 
 //the value of the mc_Entity vertex attribute (x = block id, y = block metadata). fp2 only stores a per-tile texture index in its vertex format, which can't
 //  be mapped back to a block state on the GPU, so the render pass provides a single value for all vertices instead.
 uniform vec4 u_mcEntity;
+//1.0 if vanilla per-face diffuse shading ("old lighting") is enabled for the active shader pack, 0.0 otherwise.
+uniform float u_oldLighting;
 
 //
 //
 // CONSTANTS
-//
 //
 //
 
@@ -84,12 +82,13 @@ const int PROVOKING = 2;
 // UTILITIES
 //
 //
-//
 
 vec3 normalVector() {
     //compute the face normal from the triangle's winding order. vanilla terrain triangles are counter-clockwise when viewed from the front, and fp2's
     //  own fragment shader path ends up with a normal vector pointing in the same direction (as it is computed from the screen-space winding order)
-    return normalize(cross(gs_in[1].pos - gs_in[0].pos, gs_in[2].pos - gs_in[0].pos));
+    vec3 n = cross(gs_in[1].pos - gs_in[0].pos, gs_in[2].pos - gs_in[0].pos);
+    float lenSq = dot(n, n);
+    return lenSq > 1e-12 ? n * inversesqrt(lenSq) : vec3(0.0, 1.0, 0.0);
 }
 
 //packs a value in the range [0, 1] into an unsigned byte
@@ -142,7 +141,14 @@ void main() {
     uint state = gs_in[PROVOKING].state;
 
     //get the texture data for the block face this triangle belongs to
-    TexQuadList list = stateAndFaceIndexToTexQuadList(state, normalToFaceIndex(normal));
+    uint faceIndex = normalToFaceIndex(normal);
+    TexQuadList list = stateAndFaceIndexToTexQuadList(state, faceIndex);
+    //multi-layer side faces (e.g. grass_side + grass_side_overlay) represent a 1-block vertical cross-section and look
+    //  wrong on sloped rough/LOD terrain. keep them only for truly vertical exact faces; use top/bottom on slopes instead.
+    if (faceIndex != 1u && faceIndex != 4u && (list.last - list.first > 1u) && abs(normal.y) > 0.01) {
+        faceIndex = normal.y > 0.35 ? 1u : 4u;
+        list = stateAndFaceIndexToTexQuadList(state, faceIndex);
+    }
     PackedBakedQuad quad = quadIndexToQuad(list.first);
 
     vec4 quadCoords = quad.coords;
@@ -171,15 +177,10 @@ void main() {
     vec2 safeMaxUV = quadCoords.pq - uvInset;
 
     //fp2's vertex colors already contain ambient occlusion and the block's tint, we only need to apply the quad's texture tint.
-    //the per-face diffuse shading is baked into the vertex color as well, exactly like vanilla does it (see
-    //BlockModelRenderer#renderQuadsSmooth, which multiplies the vertex color by LightUtil.diffuseLight(face)).
-    //without this, the far terrain is significantly brighter than the vanilla chunks around it when a shader pack is
-    //active (the pack computes its own lighting on top of the albedo), while fp2's own shader path (which does apply
-    //the diffuse) looks correct.
-    //note that this has nothing to do with shader packs' "general grass fix" heuristics (e.g. SEUS Renewed's
-    //GENERAL_GRASS_FIX in gbuffers_terrain.vsh), which are triggered by non-axis-aligned normals, not by the
-    //vertex color.
-    vec3 vertexColor = max(gs_in[PROVOKING].color, vec3(quad.tint)) * diffuseLight(normal);
+    //per-face diffuse shading is only baked when the active shader pack uses OptiFine's oldLighting (e.g. SEUS Renewed);
+    //packs with oldLighting=false (e.g. Chocapic13, BSL, Sildurs) expect unshaded gl_Color and compute directional lighting themselves.
+    float faceShade = mix(1.0, diffuseLight(normal), u_oldLighting);
+    vec3 vertexColor = max(gs_in[PROVOKING].color, vec3(quad.tint)) * faceShade;
 
     //pack the values which are constant for the whole triangle
     uint packedColor = packUnorm8(vertexColor.r) | (packUnorm8(vertexColor.g) << 8) | (packUnorm8(vertexColor.b) << 16) | (255u << 24);
@@ -189,10 +190,10 @@ void main() {
     vec4 tangentOut = computeTangent(normal, factors[0], factors[1], factors[2]);
 
     for (int i = 0; i < 3; i++) {
-        //fp2 stores the lightmap coordinates normalized, but vanilla (and shader packs) use the 0-255 range.
-        //vanilla actually emits 0..240; match it so packs' lmcoord math agrees with vanilla chunks
-        uint packedLight = packUnorm8(gs_in[i].light.x * (240.0 / 255.0))
-                         | (packUnorm8(gs_in[i].light.y * (240.0 / 255.0)) << 16);
+        //VoxelBaker packs (L << 4) | 8 as normalized unorm8 (8..248); subtract 8 to recover vanilla's exact 0..240 (L * 16)
+        uint blockLight = uint(clamp(round(gs_in[i].light.x * 255.0 - 8.0), 0.0, 240.0));
+        uint skyLight = uint(clamp(round(gs_in[i].light.y * 255.0 - 8.0), 0.0, 240.0));
+        uint packedLight = blockLight | (skyLight << 16);
 
         xfb_pos = vec4(gs_in[i].pos, 1.0);
         xfb_colorNormal = uvec2(packedColor, packedNormal);

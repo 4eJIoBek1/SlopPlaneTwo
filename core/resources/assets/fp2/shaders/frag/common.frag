@@ -82,6 +82,10 @@ vec4 sampleTerrain(vec3 normal)  {
     uint state = fs_in_state;
     uint faceIndex = normalToFaceIndex(normal);
     TexQuadList list = stateAndFaceIndexToTexQuadList(state, faceIndex);
+    if (faceIndex != 1u && faceIndex != 4u && (list.last - list.first > 1u) && abs(normal.y) > 0.01) {
+        faceIndex = normal.y > 0.35 ? 1u : 4u;
+        list = stateAndFaceIndexToTexQuadList(state, faceIndex);
+    }
 
     PackedBakedQuad quad = quadIndexToQuad(list.first);
     vec4 quadCoords = quad.coords;

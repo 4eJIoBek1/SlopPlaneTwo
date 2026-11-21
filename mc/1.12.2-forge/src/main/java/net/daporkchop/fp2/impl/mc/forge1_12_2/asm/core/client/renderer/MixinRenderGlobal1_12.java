@@ -128,9 +128,15 @@ abstract class MixinRenderGlobal1_12 implements IMixinRenderGlobal1_12 {
             IFarClientContext context = player.activeContext();
             AbstractFarRenderer renderer;
             if (context != null && (renderer = context.renderer()) != null) {
-                this.mc.profiler.startSection("fp2_prepare");
-                renderer.prepare(((IMixinEntityRenderer1_12) this.mc.entityRenderer).fp2_cameraState(), (IFrustum) camera);
-                this.mc.profiler.endSection();
+                if (renderer.needsReloadForShaderPackChange()) {
+                    context.reloadRenderer();
+                    renderer = context.renderer();
+                }
+                if (renderer != null) {
+                    this.mc.profiler.startSection("fp2_prepare");
+                    renderer.prepare(((IMixinEntityRenderer1_12) this.mc.entityRenderer).fp2_cameraState(), (IFrustum) camera);
+                    this.mc.profiler.endSection();
+                }
             }
         });
     }
@@ -197,11 +203,9 @@ abstract class MixinRenderGlobal1_12 implements IMixinRenderGlobal1_12 {
         fp2().client().currentPlayer().ifPresent(player -> {
             IFarClientContext context = player.activeContext();
             AbstractFarRenderer renderer;
-            if (context != null && (renderer = context.renderer()) != null) {
+            if (context != null && (renderer = context.renderer()) != null && !renderer.needsReloadForShaderPackChange()) {
                 this.mc.getTextureManager().bindTexture(TextureMap.LOCATION_BLOCKS_TEXTURE);
-                ((ATMinecraft1_12) this.mc).getTextureMapBlocks().setBlurMipmapDirect(false, this.mc.gameSettings.mipmapLevels > 0);
                 renderer.render(((IMixinEntityRenderer1_12) this.mc.entityRenderer).fp2_cameraState(), ((IMixinEntityRenderer1_12) this.mc.entityRenderer).fp2_drawState());
-                ((ATMinecraft1_12) this.mc).getTextureMapBlocks().restoreLastBlurMipmap();
             }
         });
     }

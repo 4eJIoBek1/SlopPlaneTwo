@@ -23,6 +23,7 @@ import net.daporkchop.fp2.core.client.render.ShaderPackCompat;
 import net.daporkchop.fp2.core.engine.client.RenderConstants;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
+import org.lwjgl.opengl.GL11;
 import org.lwjgl.opengl.GL20;
 
 import static net.daporkchop.fp2.impl.mc.forge1_12_2.compat.of.OFHelper1_12.*;
@@ -88,17 +89,36 @@ public final class OFShaderPackRenderer1_12 implements ShaderPackCompat.Renderer
     }
 
     @Override
-    public void beginPass(int level, int pass) {
-        //OptiFine caches the currently active program. As FP2 binds its own shader programs for drawing, OptiFine's cache thinks that its terrain
-        //  program is still active, which would cause the "begin" call below to do nothing! Switching to a different program first makes OptiFine
-        //  actually bind the terrain program again. Note that the program which was bound before is restored after each transform feedback capture,
-        //  so the cache is consistent again by the time this returns.
-        of_ShadersRender_endTerrain();
+    public boolean isOldLighting() {
+        return of_Shaders_isOldLighting();
+    }
 
-        if (pass == RenderConstants.LAYER_CUTOUT || pass == RenderConstants.LAYER_TRANSPARENT) {
-            of_ShadersRender_beginTerrainCutout();
+    @Override
+    public void beginPass(int level, int pass) {
+        if (this.isShadowPass()) {
+            //During the shadow pass, Shaders.useProgram() forces ProgramShadow and returns early when activeProgram is
+            //  already ProgramShadow, so calling endTerrain()/beginTerrain*() would be a no-op and leave FP2's shader bound.
+            int shadowProgram = of_Shaders_programShadowId();
+            GL20.glUseProgram(Math.max(shadowProgram, 0));
         } else {
-            of_ShadersRender_beginTerrainSolid();
+            //OptiFine caches the currently active program. As FP2 binds its own shader programs for drawing, OptiFine's cache thinks that its terrain
+            //  program is still active, which would cause the "begin" call below to do nothing! Switching to a different program first makes OptiFine
+            //  actually bind the terrain program again. Note that the program which was bound before is restored after each transform feedback capture,
+            //  so the cache is consistent again by the time this returns.
+            of_ShadersRender_endTerrain();
+
+            if (pass == RenderConstants.LAYER_CUTOUT || pass == RenderConstants.LAYER_TRANSPARENT) {
+                of_ShadersRender_beginTerrainCutout();
+            } else {
+                of_ShadersRender_beginTerrainSolid();
+            }
+        }
+
+        if (pass == RenderConstants.LAYER_CUTOUT) {
+            GL11.glEnable(GL11.GL_ALPHA_TEST);
+            GL11.glAlphaFunc(GL11.GL_GREATER, 0.1f);
+        } else {
+            GL11.glDisable(GL11.GL_ALPHA_TEST);
         }
 
         this.setConstantAttributes();

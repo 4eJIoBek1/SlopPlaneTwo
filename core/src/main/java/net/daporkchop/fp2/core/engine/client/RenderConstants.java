@@ -89,6 +89,11 @@ public class RenderConstants {
     public static final String MC_ENTITY_UNIFORM_NAME = "u_mcEntity";
 
     /**
+     * Name of the uniform which indicates whether vanilla per-face diffuse shading ("old lighting") is enabled for the active shader pack.
+     */
+    public static final String OLD_LIGHTING_UNIFORM_NAME = "u_oldLighting";
+
+    /**
      * The byte offset of the position attribute in a vertex captured by the shader pack compatibility transform feedback pass.
      */
     public static final int SHADER_PACK_XFB_POS_OFFSET = 0;

@@ -273,13 +273,13 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
                 double vert = -ny;
                 double vertSq = vert * vert;
 
-                if (vertSq >= 0.85d * horizSq) { //gentle/moderate slopes up to ~47 degrees: biome topBlock (grass/sand)
+                if (vertSq >= 1.0d * horizSq) { //gentle/moderate slopes up to 45 degrees: biome topBlock (grass/sand)
                     if (top != null) {
                         return this.registry().state2id(top);
                     } else if (filler != null) {
                         return this.registry().state2id(filler);
                     }
-                } else if (vertSq >= 0.10d * horizSq) { //hillside slopes (~47 to ~72 degrees): pure fillerBlock (dirt/sandstone)
+                } else if (vertSq >= 0.10d * horizSq) { //hillside slopes (~45 to ~72 degrees): pure fillerBlock (dirt/sandstone)
                     if (filler != null) {
                         return this.registry().state2id(filler);
                     } else if (top != null) {

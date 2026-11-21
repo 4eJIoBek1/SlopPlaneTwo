@@ -299,6 +299,7 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
         int captureVao = this.shaderPackCaptureVao(shaderPack);
         int tilePosUniform = xfbProgram.uniformLocation(RenderConstants.TILE_POS_UNIFORM_NAME);
         int mcEntityUniform = xfbProgram.uniformLocation(RenderConstants.MC_ENTITY_UNIFORM_NAME);
+        int oldLightingUniform = xfbProgram.uniformLocation(RenderConstants.OLD_LIGHTING_UNIFORM_NAME);
 
         //shader packs use the mc_Entity attribute to detect special blocks. fp2's vertex format only stores a per-tile texture index, which can't be mapped
         //  back to a block state on the GPU, so a constant value is used for all vertices of a pass instead. the translucent pass only ever contains water,
@@ -369,6 +370,9 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
 
                 val xfbUniformSetter = xfbProgram.bindUnsafe();
                 xfbUniformSetter.set4f(mcEntityUniform, mcEntityX, mcEntityY, 0.0f, 1.0f);
+                if (oldLightingUniform >= 0) {
+                    xfbUniformSetter.set1f(oldLightingUniform, shaderPack.isOldLighting() ? 1.0f : 0.0f);
+                }
 
                 //rasterizer discard must only be enabled for the capture itself. the captured geometry is drawn immediately afterwards, and that draw call
                 //  has to be rasterized just like any other. a single transform feedback pass covers the whole batch, which is significantly cheaper than

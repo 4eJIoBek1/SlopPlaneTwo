@@ -106,10 +106,12 @@ public class OFHelper1_12 {
     private static final MethodHandle OF_SHADERS_ENDWATER = !OF ? null : staticHandle("net.optifine.shaders.Shaders", void.class, "endWater");
 
     private static final Field OF_SHADERS_ISSHADOWPASS_FIELD = !OF ? null : field("net.optifine.shaders.Shaders", "isShadowPass");
+    private static final Field OF_SHADERS_PROGRAMSHADOW_FIELD = !OF ? null : field("net.optifine.shaders.Shaders", "ProgramShadow");
     private static final Field OF_SHADERS_PROGRAMWATER_FIELD = !OF ? null : field("net.optifine.shaders.Shaders", "ProgramWater");
     private static final Field OF_SHADERS_PROGRAMTERRAIN_FIELD = !OF ? null : field("net.optifine.shaders.Shaders", "ProgramTerrain");
     private static final Method OF_PROGRAM_GETID = !OF ? null : method("net.optifine.shaders.Program", "getId");
     private static final MethodHandle OF_BLOCKALIASES_GETBLOCKALIASID = !OF ? null : staticHandle("net.optifine.shaders.BlockAliases", int.class, "getBlockAliasId", int.class, int.class);
+    private static final MethodHandle OF_SHADERS_ISOLDLIGHTING = !OF ? null : staticHandle("net.optifine.shaders.Shaders", boolean.class, "isOldLighting");
 
     public static final String OF_DEFINE_SHADERS = "OPTIFINE_SHADERS";
 
@@ -172,6 +174,29 @@ public class OFHelper1_12 {
     @SneakyThrows(Throwable.class)
     public static boolean of_Shaders_isShadowPass() {
         return OF && OF_SHADERS_ISSHADOWPASS_FIELD.getBoolean(null);
+    }
+
+    /**
+     * @return the OpenGL program ID of the shader pack's shadow shader program, or a non-positive value if no shadow program is available
+     */
+    public static int of_Shaders_programShadowId() {
+        if (!OF) {
+            return -1;
+        }
+        try {
+            Object program = OF_SHADERS_PROGRAMSHADOW_FIELD.get(null);
+            return program == null ? -1 : (int) OF_PROGRAM_GETID.invoke(program);
+        } catch (Throwable t) {
+            return -1;
+        }
+    }
+
+    /**
+     * @return whether vanilla per-face diffuse shading ("old lighting") is enabled for the active shader pack
+     */
+    @SneakyThrows(Throwable.class)
+    public static boolean of_Shaders_isOldLighting() {
+        return !OF || (boolean) OF_SHADERS_ISOLDLIGHTING.invokeExact();
     }
 
     /**

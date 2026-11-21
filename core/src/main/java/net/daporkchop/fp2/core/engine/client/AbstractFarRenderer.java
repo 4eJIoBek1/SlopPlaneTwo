@@ -655,15 +655,15 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
         //bind texture UVs
         this.levelRenderer.textureUVs().gpuQuadLists().bind(this.gl);
 
-        if (!FP2_DEBUG || this.fp2.globalConfig().debug().backfaceCulling()) {
-            this.gl.glEnable(GL_CULL_FACE);
-        }
-
         boolean shadowPass = ShaderPackCompat.isActive() && ShaderPackCompat.renderer().isShadowPass();
         if (shadowPass) {
+            this.gl.glDisable(GL_CULL_FACE);
             this.gl.glDisable(GL_STENCIL_TEST);
             this.gl.glDepthFunc(GL_LEQUAL);
         } else {
+            if (!FP2_DEBUG || this.fp2.globalConfig().debug().backfaceCulling()) {
+                this.gl.glEnable(GL_CULL_FACE);
+            }
             this.gl.glDepthFunc(drawArguments.reversedZ ? GL_GREATER : GL_LESS);
             this.gl.glEnable(GL_STENCIL_TEST);
             this.gl.glStencilMask(0xFF);
