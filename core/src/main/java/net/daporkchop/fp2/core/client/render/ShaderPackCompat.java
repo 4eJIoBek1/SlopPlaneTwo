@@ -73,10 +73,13 @@ public final class ShaderPackCompat {
         }
 
         /**
-         * Gets the block alias ID for cutout foliage/leaves (block ID 18, oak leaves) to pass in mc_Entity.x.
+         * Gets the block alias ID for cutout terrain ({@link RenderConstants#LAYER_CUTOUT}) to pass in mc_Entity.x.
+         * <p>
+         * Leaves are already routed to {@link RenderConstants#LAYER_SOLID}, so {@code LAYER_CUTOUT} mainly contains grass blocks;
+         * passing leaves ID {@code 18} would make shader packs apply foliage waving, subsurface scattering, and reduced shadow bias to grass terrain.
          */
         default int cutoutBlockAliasId() {
-            return 18;
+            return 1;
         }
 
         /**

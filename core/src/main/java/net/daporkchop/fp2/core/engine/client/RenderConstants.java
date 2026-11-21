@@ -94,6 +94,12 @@ public class RenderConstants {
     public static final String OLD_LIGHTING_UNIFORM_NAME = "u_oldLighting";
 
     /**
+     * Name of the uniform selecting whether the shader pack transform feedback geometry shader emits the base quad ({@code 0})
+     * or the second overlay quad ({@code 1}, e.g. biome-tinted {@code grass_side_overlay} on vertical grass block sides).
+     */
+    public static final String OVERLAY_PASS_UNIFORM_NAME = "u_overlayPass";
+
+    /**
      * The byte offset of the position attribute in a vertex captured by the shader pack compatibility transform feedback pass.
      */
     public static final int SHADER_PACK_XFB_POS_OFFSET = 0;

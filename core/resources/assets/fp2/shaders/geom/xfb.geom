@@ -67,6 +67,8 @@ out vec4 xfb_tangent; //xyz = tangent vector, w = handedness (+1.0)
 uniform vec4 u_mcEntity;
 //1.0 if vanilla per-face diffuse shading ("old lighting") is enabled for the active shader pack, 0.0 otherwise.
 uniform float u_oldLighting;
+//0 = emit base quad (list.first), non-zero = emit overlay quad (list.first + 1) for multi-layer vertical sides.
+uniform int u_overlayPass;
 
 //
 //
@@ -143,13 +145,29 @@ void main() {
     //get the texture data for the block face this triangle belongs to
     uint faceIndex = normalToFaceIndex(normal);
     TexQuadList list = stateAndFaceIndexToTexQuadList(state, faceIndex);
-    //multi-layer side faces (e.g. grass_side + grass_side_overlay) represent a 1-block vertical cross-section and look
-    //  wrong on sloped rough/LOD terrain. keep them only for truly vertical exact faces; use top/bottom on slopes instead.
-    if (faceIndex != 1u && faceIndex != 4u && (list.last - list.first > 1u) && abs(normal.y) > 0.01) {
+    bool isSideMultiLayer = faceIndex != 1u && faceIndex != 4u && (list.last - list.first > 1u);
+    if (u_overlayPass != 0) {
+        if (!isSideMultiLayer || abs(normal.y) > 0.01) {
+            //emit a degenerate zero-area triangle with a valid unit normal so vertex count stays identical to the base pass
+            for (int i = 0; i < 3; i++) {
+                xfb_pos = vec4(0.0);
+                xfb_colorNormal = uvec2(0u, 127u << 8);
+                xfb_uv = vec2(0.0);
+                xfb_misc = uvec2(0u);
+                xfb_tangent = vec4(1.0, 0.0, 0.0, 1.0);
+                gl_Position = vec4(0.0);
+                EmitVertex();
+            }
+            EndPrimitive();
+            return;
+        }
+    } else if (isSideMultiLayer && abs(normal.y) > 0.01) {
+        //multi-layer side faces (e.g. grass_side + grass_side_overlay) represent a 1-block vertical cross-section and look
+        //  wrong on sloped rough/LOD terrain. keep them only for truly vertical exact faces; use top/bottom on slopes instead.
         faceIndex = normal.y > 0.35 ? 1u : 4u;
         list = stateAndFaceIndexToTexQuadList(state, faceIndex);
     }
-    PackedBakedQuad quad = quadIndexToQuad(list.first);
+    PackedBakedQuad quad = quadIndexToQuad(u_overlayPass != 0 ? list.first + 1u : list.first);
 
     vec4 quadCoords = quad.coords;
 

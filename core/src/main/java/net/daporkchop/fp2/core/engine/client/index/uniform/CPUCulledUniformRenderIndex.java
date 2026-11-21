@@ -300,12 +300,13 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
         int tilePosUniform = xfbProgram.uniformLocation(RenderConstants.TILE_POS_UNIFORM_NAME);
         int mcEntityUniform = xfbProgram.uniformLocation(RenderConstants.MC_ENTITY_UNIFORM_NAME);
         int oldLightingUniform = xfbProgram.uniformLocation(RenderConstants.OLD_LIGHTING_UNIFORM_NAME);
+        int overlayPassUniform = xfbProgram.uniformLocation(RenderConstants.OVERLAY_PASS_UNIFORM_NAME);
 
         //shader packs use the mc_Entity attribute to detect special blocks. fp2's vertex format only stores a per-tile texture index, which can't be mapped
         //  back to a block state on the GPU, so a constant value is used for all vertices of a pass instead. the translucent pass only ever contains water,
         //  which is identified by its block id (8/9, as used by Chocapic13) as well as by a metadata value of 1 (as used by SEUS).
-        //  for the solid pass, we pass the block alias for stone (block id 1) so shader packs like SEUS don't misclassify smooth/sloped terrain
-        //  geometry as cross-model grass foliage via their non-axis-aligned normal heuristic (GENERAL_GRASS_FIX).
+        //  for the solid and cutout passes (which contain solid terrain and grass blocks, while leaves are routed to solid), we pass a solid terrain alias
+        //  (block id 1, stone) so shader packs don't treat grass/terrain geometry as waving translucent foliage or tilted cross-model grass.
         float mcEntityX;
         float mcEntityY;
         if (pass == RenderConstants.LAYER_TRANSPARENT) {
@@ -364,45 +365,64 @@ public class CPUCulledUniformRenderIndex<VertexType extends AttributeStruct> ext
 
                 this.ensureShaderPackCaptureCapacity((int) batchVertices);
 
-                //captures are written to the buffer at binding point 0
-                gl.glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, this.shaderPackCaptureBuffer);
-                gl.glBindVertexArray(fp2Vao);
+                int passCount = (pass == RenderConstants.LAYER_CUTOUT && !shaderPack.isShadowPass() && overlayPassUniform >= 0) ? 2 : 1;
+                for (int overlayPass = 0; overlayPass < passCount; overlayPass++) {
+                    //captures are written to the buffer at binding point 0
+                    gl.glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, this.shaderPackCaptureBuffer);
+                    gl.glBindVertexArray(fp2Vao);
 
-                val xfbUniformSetter = xfbProgram.bindUnsafe();
-                xfbUniformSetter.set4f(mcEntityUniform, mcEntityX, mcEntityY, 0.0f, 1.0f);
-                if (oldLightingUniform >= 0) {
-                    xfbUniformSetter.set1f(oldLightingUniform, shaderPack.isOldLighting() ? 1.0f : 0.0f);
-                }
+                    val xfbUniformSetter = xfbProgram.bindUnsafe();
+                    xfbUniformSetter.set4f(mcEntityUniform, mcEntityX, mcEntityY, 0.0f, 1.0f);
+                    if (oldLightingUniform >= 0) {
+                        xfbUniformSetter.set1f(oldLightingUniform, shaderPack.isOldLighting() ? 1.0f : 0.0f);
+                    }
+                    if (overlayPassUniform >= 0) {
+                        xfbUniformSetter.set1i(overlayPassUniform, overlayPass);
+                    }
 
-                //rasterizer discard must only be enabled for the capture itself. the captured geometry is drawn immediately afterwards, and that draw call
-                //  has to be rasterized just like any other. a single transform feedback pass covers the whole batch, which is significantly cheaper than
-                //  starting and stopping transform feedback once per tile.
-                gl.glEnable(GL_RASTERIZER_DISCARD);
-                gl.glBeginTransformFeedback(GL_TRIANGLES);
-                try {
-                    for (int i = tileIndex; i < batchEnd; i++) {
-                        val pos = tilePositions[i];
-                        val command = tileCommands[i];
+                    //rasterizer discard must only be enabled for the capture itself. the captured geometry is drawn immediately afterwards, and that draw call
+                    //  has to be rasterized just like any other. a single transform feedback pass covers the whole batch, which is significantly cheaper than
+                    //  starting and stopping transform feedback once per tile.
+                    gl.glEnable(GL_RASTERIZER_DISCARD);
+                    gl.glBeginTransformFeedback(GL_TRIANGLES);
+                    try {
+                        for (int i = tileIndex; i < batchEnd; i++) {
+                            val pos = tilePositions[i];
+                            val command = tileCommands[i];
 
-                        //capture the tile's geometry in the vertex format used by vanilla chunks
-                        xfbUniformSetter.set4i(tilePosUniform, pos.x(), pos.y(), pos.z(), pos.level());
+                            //capture the tile's geometry in the vertex format used by vanilla chunks
+                            xfbUniformSetter.set4i(tilePosUniform, pos.x(), pos.y(), pos.z(), pos.level());
 
-                        if (absoluteIndices) {
-                            gl.glDrawElements(modeEnum, command.count, indexType, command.firstIndex * (long) indexSize);
-                        } else {
-                            gl.glDrawElementsBaseVertex(modeEnum, command.count, indexType, command.firstIndex * (long) indexSize, command.baseVertex);
+                            if (absoluteIndices) {
+                                gl.glDrawElements(modeEnum, command.count, indexType, command.firstIndex * (long) indexSize);
+                            } else {
+                                gl.glDrawElementsBaseVertex(modeEnum, command.count, indexType, command.firstIndex * (long) indexSize, command.baseVertex);
+                            }
+                        }
+                    } finally {
+                        gl.glEndTransformFeedback();
+                        gl.glDisable(GL_RASTERIZER_DISCARD);
+                    }
+
+                    //draw the captured geometry using the shader pack's program. the captured vertices are already relative to the camera, so the model-view
+                    //  matrix must be left untouched (just like vanilla chunk rendering, which performs the camera-relative translation on the CPU).
+                    gl.glUseProgram(packProgram);
+                    gl.glBindVertexArray(captureVao);
+                    if (overlayPass == 0) {
+                        gl.glDrawArrays(GL_TRIANGLES, 0, (int) batchVertices);
+                    } else {
+                        int oldDepthFunc = gl.glGetInteger(GL_DEPTH_FUNC);
+                        boolean oldDepthMask = gl.glGetBoolean(GL_DEPTH_WRITEMASK);
+                        try {
+                            gl.glDepthFunc(GL_LEQUAL);
+                            gl.glDepthMask(false);
+                            gl.glDrawArrays(GL_TRIANGLES, 0, (int) batchVertices);
+                        } finally {
+                            gl.glDepthFunc(oldDepthFunc);
+                            gl.glDepthMask(oldDepthMask);
                         }
                     }
-                } finally {
-                    gl.glEndTransformFeedback();
-                    gl.glDisable(GL_RASTERIZER_DISCARD);
                 }
-
-                //draw the captured geometry using the shader pack's program. the captured vertices are already relative to the camera, so the model-view
-                //  matrix must be left untouched (just like vanilla chunk rendering, which performs the camera-relative translation on the CPU).
-                gl.glUseProgram(packProgram);
-                gl.glBindVertexArray(captureVao);
-                gl.glDrawArrays(GL_TRIANGLES, 0, (int) batchVertices);
 
                 tileIndex = batchEnd;
             }
