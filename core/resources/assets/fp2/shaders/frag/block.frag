@@ -33,9 +33,11 @@ vec4 computeBlockColor(vec3 normal) {
         discard;
     }
 #else
-    //for solid pass (including leaves in LOD), fill transparent holes with darkened foliage color instead of sky void
-    if (frag_color.a < 0.5) {
-        frag_color.rgb = max(fs_in_color * 0.35, vec3(0.15));
+    //for solid pass (including leaves in LOD), fill cutout holes (<= u_alphaRefCutout) with darkened foliage color
+    //instead of sky void; using u_alphaRefCutout (0.1) matches vanilla CUTOUT_MIPPED on OptiFine mipmaps
+    //and leaves translucent water (alpha ~0.8) untouched
+    if (frag_color.a <= u_alphaRefCutout) {
+        frag_color.rgb = max(fs_in_color * 0.45, vec3(0.04));
         frag_color.a = 1.0;
     }
 #endif
