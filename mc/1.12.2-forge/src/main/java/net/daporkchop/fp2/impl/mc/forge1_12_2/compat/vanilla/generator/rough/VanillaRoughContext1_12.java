@@ -33,7 +33,6 @@ import net.minecraft.world.gen.NoiseGeneratorPerlin;
 
 import java.util.Random;
 
-import static net.daporkchop.fp2.core.engine.server.gen.AbstractVoxelGenerator.CACHE_SIZE;
 import static net.daporkchop.fp2.impl.mc.forge1_12_2.compat.vanilla.VanillaTerrainGenConstants1_12.*;
 import static net.daporkchop.lib.common.math.PMath.*;
 import static net.daporkchop.lib.common.util.PValidation.*;
@@ -94,16 +93,6 @@ public class VanillaRoughContext1_12 {
     protected int baseX;
     protected int baseZ;
     protected int level = -1;
-    public int tileBaseX;
-    public int tileBaseY;
-    public int tileBaseZ;
-
-    public final int[] boundaryStates = new int[CACHE_SIZE * CACHE_SIZE * CACHE_SIZE];
-    public final int[] tempStates = new int[CACHE_SIZE * 16];
-
-    public void resetBoundary() {
-        java.util.Arrays.fill(this.boundaryStates, 0);
-    }
 
     public VanillaRoughContext1_12(@NonNull FGameRegistry registry, @NonNull WorldServer world, int size) {
         this.size = notNegative(size, "size");
@@ -169,15 +158,17 @@ public class VanillaRoughContext1_12 {
         }
 
         // 2. Точная решётка узлов 4x4 (мировые координаты узлов, НЕ зависящие от сдвига baseX = -1)
-        this.regionGX0 = Math.floorDiv(baseX, GTH_SIZE);
-        this.regionGZ0 = Math.floorDiv(baseZ, GTH_SIZE);
         if (level >= GTH_SHIFT) {
+            this.regionGX0 = Math.floorDiv(baseX, GTH_SIZE);
+            this.regionGZ0 = Math.floorDiv(baseZ, GTH_SIZE);
             this.regionHStride = hStep >> GTH_SHIFT;
             this.regionNX = this.regionNZ = this.size;
         } else {
+            this.regionGX0 = Math.floorDiv(baseX - 1, GTH_SIZE);
+            this.regionGZ0 = Math.floorDiv(baseZ - 1, GTH_SIZE);
             this.regionHStride = 1;
-            int maxGX = Math.floorDiv(baseX + spanBlocks, GTH_SIZE);
-            int maxGZ = Math.floorDiv(baseZ + spanBlocks, GTH_SIZE);
+            int maxGX = Math.floorDiv(baseX + spanBlocks - 1, GTH_SIZE);
+            int maxGZ = Math.floorDiv(baseZ + spanBlocks - 1, GTH_SIZE);
             int n = Math.max(maxGX - this.regionGX0, maxGZ - this.regionGZ0) + 2;
             this.regionNX = this.regionNZ = n;
 
@@ -392,7 +383,7 @@ public class VanillaRoughContext1_12 {
                 nx0 = dx;
                 tx = 0.0d;
             } else {
-                double fx = (double) blockX / GTH_SIZE - this.regionGX0;
+                double fx = (blockX - 0.5d) / GTH_SIZE - this.regionGX0;
                 nx0 = floorI(fx);
                 tx = fx - nx0;
             }
@@ -405,7 +396,7 @@ public class VanillaRoughContext1_12 {
             }
             for (int dy = 0; dy < size; dy++) {
                 int blockY = minBlockY + (dy << level);
-                double fy = (double) blockY / GTV_SIZE;
+                double fy = (blockY - 0.5d) / GTV_SIZE;
                 int ny0 = floorI(fy);
                 double ty = fy - ny0;
                 if (ny0 < 0) {
@@ -423,7 +414,7 @@ public class VanillaRoughContext1_12 {
                         nz0 = dz;
                         tz = 0.0d;
                     } else {
-                        double fz = (double) blockZ / GTH_SIZE - this.regionGZ0;
+                        double fz = (blockZ - 0.5d) / GTH_SIZE - this.regionGZ0;
                         nz0 = floorI(fz);
                         tz = fz - nz0;
                     }
@@ -523,7 +514,8 @@ public class VanillaRoughContext1_12 {
             for (int dy = 0; dy < size; dy++) {
                 double blockY = minBlockY + (dy << level);
                 for (int dz = 0; dz < size; dz++, i++) {
-                    out[i] = heights[dx * size + dz] - blockY;
+                    double h = heights[dx * size + dz];
+                    out[i] = (h > -500.0d ? h + 0.5d : h) - blockY;
                 }
             }
         }

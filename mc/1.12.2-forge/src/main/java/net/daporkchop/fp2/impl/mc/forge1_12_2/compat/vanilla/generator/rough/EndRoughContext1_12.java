@@ -227,14 +227,19 @@ public class EndRoughContext1_12 {
         //  per-column cache of x-interpolated corner gradients which is only refreshed when floor(y) changes: the
         //  values at a node depend on the entire run prefix. Sampling a shifted or shortened run silently produces
         //  different (wrong) values. Columns are independent of each other, so one vanilla run per column is safe.
-        this.regionGX0 = Math.floorDiv(minBlockX, EH_SIZE);
-        this.regionGZ0 = Math.floorDiv(minBlockZ, EH_SIZE);
         if (exactH) { //samples are grid-aligned: one column per tile node
+            this.regionGX0 = Math.floorDiv(minBlockX, EH_SIZE);
+            this.regionGZ0 = Math.floorDiv(minBlockZ, EH_SIZE);
             this.regionHStride = step >> EH_SHIFT;
             this.regionNX = this.regionNZ = size;
         } else { //finer than the vanilla grid: cover the native columns and interpolate
+            this.regionGX0 = Math.floorDiv(minBlockX - 1, EH_SIZE);
+            this.regionGZ0 = Math.floorDiv(minBlockZ - 1, EH_SIZE);
+            int maxGX = Math.floorDiv(minBlockX + spanBlocks - 1, EH_SIZE);
+            int maxGZ = Math.floorDiv(minBlockZ + spanBlocks - 1, EH_SIZE);
             this.regionHStride = 1;
-            this.regionNX = this.regionNZ = (spanBlocks >> EH_SHIFT) + 2;
+            this.regionNX = maxGX - this.regionGX0 + 2;
+            this.regionNZ = maxGZ - this.regionGZ0 + 2;
         }
         //y run prefix: 0..(highest needed node + 1), capped at the vanilla length. The region must always cover at
         //  least two nodes (nothing can be interpolated on a single node), which can happen for tiles far below y=0.
@@ -267,7 +272,7 @@ public class EndRoughContext1_12 {
                 nx0 = dx;
                 tx = 0.0d;
             } else {
-                double fx = (double) blockX / EH_SIZE - this.regionGX0;
+                double fx = (blockX - 0.5d) / EH_SIZE - this.regionGX0;
                 nx0 = floorI(fx);
                 tx = fx - nx0;
             }
@@ -280,7 +285,7 @@ public class EndRoughContext1_12 {
             }
             for (int dy = 0; dy < size; dy++) {
                 int blockY = minBlockY + (dy << level);
-                double fy = (double) blockY / EV_SIZE; //absolute y lattice index, same as vanilla's j1
+                double fy = (blockY - 0.5d) / EV_SIZE; //absolute y lattice index, same as vanilla's j1
                 int ny0 = floorI(fy);
                 double ty = fy - ny0;
                 if (ny0 < 0) {
@@ -298,7 +303,7 @@ public class EndRoughContext1_12 {
                         nz0 = dz;
                         tz = 0.0d;
                     } else {
-                        double fz = (double) blockZ / EH_SIZE - this.regionGZ0;
+                        double fz = (blockZ - 0.5d) / EH_SIZE - this.regionGZ0;
                         nz0 = floorI(fz);
                         tz = fz - nz0;
                     }

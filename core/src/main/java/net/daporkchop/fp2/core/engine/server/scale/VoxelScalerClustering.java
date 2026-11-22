@@ -19,7 +19,6 @@
 
 package net.daporkchop.fp2.core.engine.server.scale;
 
-import com.google.common.collect.ImmutableList;
 import lombok.NonNull;
 import net.daporkchop.fp2.core.engine.Tile;
 import net.daporkchop.fp2.core.engine.TileData;
@@ -45,9 +44,9 @@ import static net.daporkchop.lib.common.util.PValidation.checkArg;
  * @author DaPorkchop_
  */
 public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFarScaler {
-    public static final int SRC_MIN = -4;
-    public static final int SRC_MAX = (T_VOXELS << 1) + 4; // 36
-    public static final int SRC_SIZE = SRC_MAX - SRC_MIN; // 40
+    public static final int SRC_MIN = -2;
+    public static final int SRC_MAX = T_VOXELS << 1; // 32
+    public static final int SRC_SIZE = SRC_MAX - SRC_MIN; // 34
 
     public static final int DST_MIN = -1;
     public static final int DST_MAX = T_VOXELS + 1; // 17
@@ -69,9 +68,15 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
         final int[] clusterSumY = new int[TOTAL_DST_CELLS];
         final int[] clusterSumZ = new int[TOTAL_DST_CELLS];
         final int[] clusterCount = new int[TOTAL_DST_CELLS];
+        final int[] opaqueSumX = new int[TOTAL_DST_CELLS];
+        final int[] opaqueSumY = new int[TOTAL_DST_CELLS];
+        final int[] opaqueSumZ = new int[TOTAL_DST_CELLS];
+        final int[] opaqueCount = new int[TOTAL_DST_CELLS];
         final int[] dstEdges = new int[TOTAL_DST_CELLS];
         final int[] dstStates = new int[TOTAL_DST_CELLS * EDGE_COUNT];
+        final byte[] dstStateMaxY = new byte[TOTAL_DST_CELLS * EDGE_COUNT];
         final int[] dstBiomeAndLight = new int[TOTAL_DST_CELLS];
+        final short[] dstBiomeRank = new short[TOTAL_DST_CELLS];
         final BitSet dstVoxels = new BitSet(TOTAL_DST_CELLS);
         final TileData data = new TileData();
 
@@ -80,9 +85,15 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
             Arrays.fill(this.clusterSumY, 0);
             Arrays.fill(this.clusterSumZ, 0);
             Arrays.fill(this.clusterCount, 0);
+            Arrays.fill(this.opaqueSumX, 0);
+            Arrays.fill(this.opaqueSumY, 0);
+            Arrays.fill(this.opaqueSumZ, 0);
+            Arrays.fill(this.opaqueCount, 0);
             Arrays.fill(this.dstEdges, 0);
             Arrays.fill(this.dstStates, 0);
+            Arrays.fill(this.dstStateMaxY, Byte.MIN_VALUE);
             Arrays.fill(this.dstBiomeAndLight, 0);
+            Arrays.fill(this.dstBiomeRank, Short.MIN_VALUE);
             this.dstVoxels.clear();
             this.data.reset();
         }
@@ -96,7 +107,27 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
 
     @Override
     public List<TilePos> outputs(@NonNull TilePos srcPos) {
-        return ImmutableList.of(srcPos.up());
+        int x = srcPos.x();
+        int y = srcPos.y();
+        int z = srcPos.z();
+        int targetLevel = srcPos.level() + 1;
+
+        int x0 = x >> 1;
+        int x1 = (x & 1) != 0 ? x0 + 1 : x0;
+        int y0 = y >> 1;
+        int y1 = (y & 1) != 0 ? y0 + 1 : y0;
+        int z0 = z >> 1;
+        int z1 = (z & 1) != 0 ? z0 + 1 : z0;
+
+        List<TilePos> out = new TilePosArrayList((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1));
+        for (int dx = x0; dx <= x1; dx++) {
+            for (int dy = y0; dy <= y1; dy++) {
+                for (int dz = z0; dz <= z1; dz++) {
+                    out.add(new TilePos(targetLevel, dx, dy, dz));
+                }
+            }
+        }
+        return out;
     }
 
     @Override
@@ -130,9 +161,15 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
         int[] clusterSumY = ctx.clusterSumY;
         int[] clusterSumZ = ctx.clusterSumZ;
         int[] clusterCount = ctx.clusterCount;
+        int[] opaqueSumX = ctx.opaqueSumX;
+        int[] opaqueSumY = ctx.opaqueSumY;
+        int[] opaqueSumZ = ctx.opaqueSumZ;
+        int[] opaqueCount = ctx.opaqueCount;
         int[] dstEdges = ctx.dstEdges;
         int[] dstStates = ctx.dstStates;
+        byte[] dstStateMaxY = ctx.dstStateMaxY;
         int[] dstBiomeAndLight = ctx.dstBiomeAndLight;
+        short[] dstBiomeRank = ctx.dstBiomeRank;
         BitSet dstVoxels = ctx.dstVoxels;
         TileData data = ctx.data;
 
@@ -166,6 +203,7 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
 
                     // Accumulate edges & states
                     int edges = data.edges;
+                    boolean hasOpaqueEdge = false;
                     if (edges != 0) {
                         for (int edge = 0; edge < EDGE_COUNT; edge++) {
                             int dir = (edges >> (edge << 1)) & EDGE_DIR_MASK;
@@ -179,26 +217,46 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
                                     state = 1;
                                 }
 
+                                byte newType = this.extendedStateRegistryData().type(state);
+                                boolean newOpaque = newType == BLOCK_TYPE_OPAQUE;
+                                if (newOpaque) {
+                                    hasOpaqueEdge = true;
+                                }
+
+                                short rank = (short) ((newOpaque ? 128 : 0) + (edge == 1 ? 64 : 0) + (y + 2));
                                 int stateIdx = di * EDGE_COUNT + edge;
                                 int existingState = dstStates[stateIdx];
                                 if (existingState == 0) {
                                     dstStates[stateIdx] = state;
-                                    dstBiomeAndLight[di] = (data.biome << 8) | (data.light & 0xFF);
+                                    dstStateMaxY[stateIdx] = (byte) y;
+                                    if (rank >= dstBiomeRank[di]) {
+                                        dstBiomeRank[di] = rank;
+                                        dstBiomeAndLight[di] = (data.biome << 8) | (data.light & 0xFF);
+                                    }
                                 } else {
                                     byte existingType = this.extendedStateRegistryData().type(existingState);
-                                    byte newType = this.extendedStateRegistryData().type(state);
-                                    // OPAQUE always takes precedence over non-opaque (prevents leaves from erasing solid ground).
-                                    //  this also covers the water/seabed collision on high detail levels: a water surface and the
-                                    //  ground below it share a single edge, and keeping the water would drop the ground from the
-                                    //  mesh entirely (the sky would show through the translucent water). keeping the solid block
-                                    //  makes the water surface disappear from the coarse mesh instead, which is far less visible.
-                                    if (newType == BLOCK_TYPE_OPAQUE || existingType != BLOCK_TYPE_OPAQUE) {
+                                    boolean existingOpaque = existingType == BLOCK_TYPE_OPAQUE;
+                                    // OPAQUE always takes precedence over non-opaque (prevents leaves from erasing solid ground and
+                                    //  water from hiding shallow seabeds). Within the same opacity class, higher fine-Y wins so
+                                    //  top grass/surface layers aren't overwritten by lower dirt/stone layers from adjacent columns.
+                                    if ((newOpaque && !existingOpaque) || (newOpaque == existingOpaque && y >= dstStateMaxY[stateIdx])) {
                                         dstStates[stateIdx] = state;
-                                        dstBiomeAndLight[di] = (data.biome << 8) | (data.light & 0xFF);
+                                        dstStateMaxY[stateIdx] = (byte) y;
+                                        if (rank >= dstBiomeRank[di]) {
+                                            dstBiomeRank[di] = rank;
+                                            dstBiomeAndLight[di] = (data.biome << 8) | (data.light & 0xFF);
+                                        }
                                     }
                                 }
                             }
                         }
+                    }
+
+                    if (hasOpaqueEdge) {
+                        opaqueSumX[di] += offX;
+                        opaqueSumY[di] += offY;
+                        opaqueSumZ[di] += offZ;
+                        opaqueCount[di]++;
                     }
                 }
             }
@@ -244,8 +302,21 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
                         continue;
                     }
 
-                    int count = clusterCount[di];
-                    if (count > 0) {
+                    boolean opaqueWon = false;
+                    for (int edge = 0; edge < EDGE_COUNT; edge++) {
+                        int s = dstStates[di * EDGE_COUNT + edge];
+                        if (s != 0 && this.extendedStateRegistryData().type(s) == BLOCK_TYPE_OPAQUE) {
+                            opaqueWon = true;
+                            break;
+                        }
+                    }
+
+                    int count;
+                    if (opaqueWon && (count = opaqueCount[di]) > 0) {
+                        data.x = clamp((opaqueSumX[di] + count) / (count << 1), 0, POS_ONE);
+                        data.y = clamp((opaqueSumY[di] + count) / (count << 1), 0, POS_ONE);
+                        data.z = clamp((opaqueSumZ[di] + count) / (count << 1), 0, POS_ONE);
+                    } else if ((count = clusterCount[di]) > 0) {
                         // Average and scale down by 2: (sum / count) / 2 = (sum + count) / (2 * count)
                         data.x = clamp((clusterSumX[di] + count) / (count << 1), 0, POS_ONE);
                         data.y = clamp((clusterSumY[di] + count) / (count << 1), 0, POS_ONE);
@@ -262,7 +333,7 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
                     data.states[2] = dstStates[di * EDGE_COUNT + 2];
 
                     int bl = dstBiomeAndLight[di];
-                    data.biome = (bl >> 8) & 0xFF;
+                    data.biome = bl >>> 8;
                     data.light = (byte) bl;
 
                     dst.set(x, y, z, data);

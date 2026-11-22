@@ -29,6 +29,7 @@ import net.daporkchop.fp2.core.engine.Tile;
 import net.daporkchop.fp2.core.engine.TileData;
 import net.daporkchop.fp2.core.engine.TilePos;
 import net.daporkchop.fp2.core.engine.api.ctx.IFarClientContext;
+import net.daporkchop.fp2.core.engine.client.RenderConstants;
 import net.daporkchop.fp2.core.engine.client.struct.VoxelLocalAttributes;
 import net.daporkchop.fp2.core.engine.util.TilePosSingleLevelAABBSet;
 import net.daporkchop.fp2.core.util.GlobalAllocators;
@@ -50,6 +51,8 @@ import static net.daporkchop.fp2.core.util.math.MathUtil.*;
  * @author DaPorkchop_
  */
 public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
+    protected static final int COARSE_SEAM_SEARCH_RADIUS = 2;
+
     protected static int vertexMapIndex(int dx, int dy, int dz, int i, int edge) {
         int j = CONNECTION_INDICES[i];
         int ddx = dx + ((j >> 2) & 1);
@@ -88,7 +91,7 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
 
         return TilePosSingleLevelAABBSet.createInclusive(
                 new TilePos(level, x - 1, y - 1, z - 1),
-                new TilePos(level, x, y, z));
+                new TilePos(level, x, level == 0 ? y : y + 1, z));
     }
 
     @Override
@@ -105,6 +108,14 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
                     res.add(new TilePos(level, x + dx, y + dy, z + dz));
                 }
             }
+        }
+        if (level >= 1) {
+            //also include the row of horizontal neighbors directly underneath (dy = -1) so coarse seam bridging
+            //  near tile Y-boundaries (e.g. Y = 64) can still locate a neighbor surface within +-2 voxels
+            res.add(new TilePos(level, x, y - 1, z));
+            res.add(new TilePos(level, x, y - 1, z + 1));
+            res.add(new TilePos(level, x + 1, y - 1, z));
+            res.add(new TilePos(level, x + 1, y - 1, z + 1));
         }
         return res;
     }
@@ -124,7 +135,7 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
             this.writeVertices(srcs, pos.minBlockX(), pos.minBlockY(), pos.minBlockZ(), pos.level(), map, output.verts);
 
             //step 2: write indices to actually connect the vertices and build the mesh
-            this.writeIndices(srcs[0], map, output.indicesPerPass);
+            this.writeIndices(srcs, srcs[0], pos.minBlockX(), pos.minBlockY(), pos.minBlockZ(), pos.level(), map, output.verts, output.indicesPerPass);
         } finally {
             alloc.release(map);
         }
@@ -204,8 +215,9 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
         }
     }
 
-    protected void writeIndices(Tile src, int[] map, IndexWriter[] indices) {
+    protected void writeIndices(Tile[] srcs, Tile src, int baseX, int baseY, int baseZ, int level, int[] map, AttributeWriter<VoxelLocalAttributes> verts, IndexWriter[] indices) {
         final TileData data = new TileData();
+        final TileData probe = new TileData();
 
         for (int j = 0; j < src.count(); j++) {
             int voxelPos = src.get(j, data);
@@ -223,12 +235,41 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
                 }
 
                 int base = edge * CONNECTION_INDEX_COUNT;
-                int oppositeCorner, c0, c1, provoking;
-                if ((provoking = map[vertexMapIndex(dx, dy, dz, base, edge)]) < 0
-                        || (c0 = map[vertexMapIndex(dx, dy, dz, base + 1, edge)]) < 0
-                        || (c1 = map[vertexMapIndex(dx, dy, dz, base + 2, edge)]) < 0
-                        || (oppositeCorner = map[vertexMapIndex(dx, dy, dz, base + 3, edge)]) < 0) {
-                    continue; //skip if any of the vertices are missing
+                int provoking = map[vertexMapIndex(dx, dy, dz, base, edge)];
+                if (provoking < 0) {
+                    continue;
+                }
+                int c0 = map[vertexMapIndex(dx, dy, dz, base + 1, edge)];
+                int c1 = map[vertexMapIndex(dx, dy, dz, base + 2, edge)];
+                int oppositeCorner = map[vertexMapIndex(dx, dy, dz, base + 3, edge)];
+
+                if (c0 < 0 || c1 < 0 || oppositeCorner < 0) {
+                    if (level == 0) {
+                        continue; //skip if any of the vertices are missing
+                    }
+                    int faceState = data.states[edge];
+                    if (this.levelRenderer.isFoliage(faceState)) {
+                        continue;
+                    }
+                    int faceRenderType = this.levelRenderer.renderTypeForState(faceState);
+                    if (c0 < 0) {
+                        c0 = this.findOrAppendCoarseSeamVertex(srcs, probe, data, dx, dy, dz, base + 1, edge, faceState, faceRenderType, baseX, baseY, baseZ, level, verts);
+                        if (c0 < 0) {
+                            continue;
+                        }
+                    }
+                    if (c1 < 0) {
+                        c1 = this.findOrAppendCoarseSeamVertex(srcs, probe, data, dx, dy, dz, base + 2, edge, faceState, faceRenderType, baseX, baseY, baseZ, level, verts);
+                        if (c1 < 0) {
+                            continue;
+                        }
+                    }
+                    if (oppositeCorner < 0) {
+                        oppositeCorner = this.findOrAppendCoarseSeamVertex(srcs, probe, data, dx, dy, dz, base + 3, edge, faceState, faceRenderType, baseX, baseY, baseZ, level, verts);
+                        if (oppositeCorner < 0) {
+                            continue;
+                        }
+                    }
                 }
 
                 IndexWriter buf = indices[this.levelRenderer.renderTypeForState(data.states[edge])];
@@ -252,6 +293,132 @@ public class VoxelBaker implements IRenderBaker<VoxelLocalAttributes> {
                 this.appendQuad(buf, oppositeCorner, c0, c1, provoking);
             }
         }
+    }
+
+    private static int primaryActiveState(TileData probe, int preferredEdge) {
+        if (((probe.edges >> (preferredEdge << 1)) & EDGE_DIR_MASK) != EDGE_DIR_NONE && probe.states[preferredEdge] != 0) {
+            return probe.states[preferredEdge];
+        }
+        int[] order = { 1, 0, 2 };
+        for (int candidateEdge : order) {
+            if (((probe.edges >> (candidateEdge << 1)) & EDGE_DIR_MASK) != EDGE_DIR_NONE && probe.states[candidateEdge] != 0) {
+                return probe.states[candidateEdge];
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * Bridges a missing border corner vertex on coarse LODs ({@code level >= 1}) when an adjacent tile
+     * (e.g. clustering scaler vs rough generator) placed the surface within {@link #COARSE_SEAM_SEARCH_RADIUS}
+     * voxels above or below.
+     */
+    protected int findOrAppendCoarseSeamVertex(
+            Tile[] srcs, TileData probe, TileData data,
+            int dx, int dy, int dz, int i, int edge,
+            int faceState, int faceRenderType,
+            int baseX, int baseY, int baseZ, int level,
+            AttributeWriter<VoxelLocalAttributes> verts) {
+        int j = CONNECTION_INDICES[i];
+        int gx = dx + ((j >> 2) & 1);
+        int gy = dy + ((j >> 1) & 1);
+        int gz = dz + (j & 1);
+
+        if (gx != T_VOXELS && gz != T_VOXELS) {
+            return -1;
+        }
+
+        int bx = gx >> T_SHIFT;
+        int bz = gz >> T_SHIFT;
+        int lx = gx & T_MASK;
+        int lz = gz & T_MASK;
+
+        Tile tileSame = srcs[(bx << 2) | bz];
+        Tile tileUp = srcs[(bx << 2) | 2 | bz];
+        Tile tileDown = srcs.length >= 12 ? srcs[8 | (bx << 1) | bz] : null;
+        if ((gy < T_VOXELS && tileSame == null) || (tileSame == null && tileUp == null && tileDown == null)) {
+            return -1;
+        }
+
+        boolean wantTranslucent = faceRenderType == RenderConstants.LAYER_TRANSPARENT;
+        boolean found = false;
+        int matchedNy = 0;
+        int matchedX = 0;
+        int matchedY = 0;
+        int matchedZ = 0;
+
+        boolean haveFallback = false;
+        int fallbackNy = 0;
+        int fallbackX = 0;
+        int fallbackY = 0;
+        int fallbackZ = 0;
+
+        SEARCH:
+        for (int dist = 1; dist <= COARSE_SEAM_SEARCH_RADIUS; dist++) {
+            for (int sign = -1; sign <= 1; sign += 2) {
+                int ny = gy + dist * sign;
+                Tile tile = ny < 0 ? tileDown : (ny < T_VOXELS ? tileSame : tileUp);
+                int ly = ny < 0 ? ny + T_VOXELS : (ny < T_VOXELS ? ny : ny - T_VOXELS);
+                if (tile == null || ly < 0 || ly >= T_VOXELS || !tile.get(lx, ly, lz, probe)) {
+                    continue;
+                }
+
+                if (probe.edges != 0) {
+                    int probeState = primaryActiveState(probe, edge);
+                    if (probeState == 0) {
+                        continue;
+                    }
+                    if ((this.levelRenderer.renderTypeForState(probeState) == RenderConstants.LAYER_TRANSPARENT) != wantTranslucent) {
+                        continue;
+                    }
+                    if (this.levelRenderer.isFoliage(probeState)) {
+                        if (!haveFallback) {
+                            haveFallback = true;
+                            fallbackNy = ny;
+                            fallbackX = probe.x;
+                            fallbackY = probe.y;
+                            fallbackZ = probe.z;
+                        }
+                        continue;
+                    }
+                } else if (wantTranslucent) {
+                    continue;
+                }
+
+                found = true;
+                matchedNy = ny;
+                matchedX = probe.x;
+                matchedY = probe.y;
+                matchedZ = probe.z;
+                break SEARCH;
+            }
+        }
+
+        if (!found) {
+            if (!haveFallback) {
+                return -1;
+            }
+            matchedNy = fallbackNy;
+            matchedX = fallbackX;
+            matchedY = fallbackY;
+            matchedZ = fallbackZ;
+        }
+
+        final int fractMask = this.forceBlockyMesh ? 0 : -1;
+        int px = (gx << POS_FRACT_SHIFT) + (matchedX & fractMask);
+        int py = Math.max(0, (matchedNy << POS_FRACT_SHIFT) + (matchedY & fractMask));
+        int pz = (gz << POS_FRACT_SHIFT) + (matchedZ & fractMask);
+
+        int blockLight = BlockLevelConstants.unpackBlockLight(data.light);
+        int skyLight = BlockLevelConstants.unpackSkyLight(data.light);
+
+        verts.append()
+                .light((blockLight << 4) | 8, (skyLight << 4) | 8)
+                .pos(px, py, pz)
+                .state(this.textureUVs.state2index(faceState))
+                .color(this.levelRenderer.tintFactorForStateInBiomeAtPos(faceState, data.biome, baseX + (gx << level), baseY + (matchedNy << level), baseZ + (gz << level)))
+                .close();
+        return verts.size() - 1;
     }
 
     private void appendQuad(IndexWriter indices, int oppositeCorner, int c0, int c1, int provoking) {

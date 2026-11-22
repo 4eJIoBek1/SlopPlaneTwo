@@ -298,13 +298,23 @@ public abstract class TileProvider implements IFarTileProvider {
         @Override
         protected void onColumnSaved(ColumnSavedEvent event) {
             if (event.column().isFullyPopulated()) {
-                //schedule entire column to be updated
+                //schedule the saved column and its immediate horizontal neighbors so adjacent exact or
+                //  boundary-stitched rough tiles update cleanly
+                int colX = event.pos().x();
+                int colZ = event.pos().y();
                 int minY = this.coordLimits.min(0).y();
                 int maxY = this.coordLimits.max(0).y();
 
-                TilePos[] positions = new TilePos[maxY + 1 - minY];
-                for (int i = 0, y = minY; y <= maxY; i++, y++) {
-                    positions[i] = new TilePos(0, event.pos().x(), y, event.pos().y());
+                List<TilePos> positions = new ArrayList<>((maxY + 1 - minY) * 16);
+                for (int dx = -1; dx <= 2; dx++) {
+                    for (int dz = -1; dz <= 2; dz++) {
+                        for (int y = minY; y <= maxY; y++) {
+                            TilePos pos = new TilePos(0, colX + dx, y, colZ + dz);
+                            if (this.coordLimits.contains(pos)) {
+                                positions.add(pos);
+                            }
+                        }
+                    }
                 }
                 this.scheduleForUpdate(positions);
             }
@@ -332,7 +342,22 @@ public abstract class TileProvider implements IFarTileProvider {
         @Override
         protected void onCubeSaved(CubeSavedEvent event) {
             if (event.cube().isFullyPopulated()) {
-                this.scheduleForUpdate(new TilePos(0, event.pos().x(), event.pos().y(), event.pos().z()));
+                int cx = event.pos().x();
+                int cy = event.pos().y();
+                int cz = event.pos().z();
+
+                List<TilePos> positions = new ArrayList<>(64);
+                for (int dx = -1; dx <= 2; dx++) {
+                    for (int dy = -1; dy <= 2; dy++) {
+                        for (int dz = -1; dz <= 2; dz++) {
+                            TilePos pos = new TilePos(0, cx + dx, cy + dy, cz + dz);
+                            if (this.coordLimits.contains(pos)) {
+                                positions.add(pos);
+                            }
+                        }
+                    }
+                }
+                this.scheduleForUpdate(positions);
             }
         }
     }
