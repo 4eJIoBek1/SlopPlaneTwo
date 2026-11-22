@@ -19,6 +19,7 @@
 
 package net.daporkchop.fp2.core.engine.server;
 
+import it.unimi.dsi.fastutil.objects.Object2LongOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import lombok.Getter;
 import lombok.NonNull;
@@ -184,6 +185,18 @@ public class TileWorker implements SharedFutureScheduler.WorkFunction<PriorityTa
             this.provider.storage().multiSet(state.positions(),
                     StreamSupport.stream(state.minimumTimestamps().spliterator(), false).map(ITileMetadata::ofTimestamp).collect(Collectors.toList()),
                     Arrays.asList(tiles));
+
+            //if a game tick completed while rough generation was running on an uninitialized tile and vanilla terrain now exists
+            //  at any generated position, multiMarkDirty during that tick would have skipped the uninitialized handle.
+            long latestTimestamp = this.provider.currentTimestamp();
+            if (state.stage() == TaskStage.LOAD && latestTimestamp > state.worldTimestamp()) {
+                List<TilePos> nowHaveVanilla = state.positions().stream()
+                        .filter(this.provider::anyVanillaTerrainExistsAt)
+                        .collect(Collectors.toList());
+                if (!nowHaveVanilla.isEmpty()) {
+                    this.provider.storage().multiMarkDirty(nowHaveVanilla, latestTimestamp);
+                }
+            }
         } finally {
             //TODO: tileRecycler.release(tiles);
             for (Tile tile : tiles) {
@@ -241,9 +254,7 @@ public class TileWorker implements SharedFutureScheduler.WorkFunction<PriorityTa
                 .collect(Collectors.toList());
 
         //wait for all source tiles to be generated
-        this.scheduler.scatterGather(uniqueValidSourcePositions.stream()
-                .map(state.stage()::taskForPosition)
-                .collect(Collectors.toList()));
+        this.scheduler.scatterGather(uniqueValidSourcePositions.stream().map(state.stage()::taskForPosition).collect(Collectors.toList()));
 
         if (state.considerExit()) {
             return;
@@ -293,6 +304,42 @@ public class TileWorker implements SharedFutureScheduler.WorkFunction<PriorityTa
                 }
             }
         });
+
+        //if any source tiles were already dirty (or updated to a newer timestamp after our snapshot) while this parent tile
+        //  was uninitialized, multiMarkDirty would have skipped the parent because its timestamp was TIMESTAMP_BLANK.
+        //  Propagate the newest child dirty/update timestamp now that the parent handle is initialized.
+        LongList currentChildTimestamps = this.provider.storage().multiTimestamp(uniqueValidSourcePositions);
+        LongList currentChildDirtyTimestamps = this.provider.storage().multiDirtyTimestamp(uniqueValidSourcePositions);
+        Object2LongOpenHashMap<TilePos> childDirtyByPos = new Object2LongOpenHashMap<>(uniqueValidSourcePositions.size());
+        childDirtyByPos.defaultReturnValue(ITileMetadata.TIMESTAMP_BLANK);
+        for (int i = 0; i < uniqueValidSourcePositions.size(); i++) {
+            TilePos childPos = uniqueValidSourcePositions.get(i);
+            long dirtyTs = currentChildDirtyTimestamps.get(i);
+            long currentTs = currentChildTimestamps.get(i);
+            ITileSnapshot snap = snapshotsByPosition.get(childPos);
+            long snapTs = snap != null ? snap.timestamp() : ITileMetadata.TIMESTAMP_BLANK;
+            long effectiveDirtyTs = dirtyTs;
+            if (currentTs > snapTs) {
+                effectiveDirtyTs = Math.max(effectiveDirtyTs, currentTs);
+            }
+            if (effectiveDirtyTs != ITileMetadata.TIMESTAMP_BLANK) {
+                childDirtyByPos.put(childPos, effectiveDirtyTs);
+            }
+        }
+        if (!childDirtyByPos.isEmpty()) {
+            state.forEachPositionHandleTimestamp((pos, handle, minimumTimestamp) -> {
+                long maxDirtyTs = ITileMetadata.TIMESTAMP_BLANK;
+                for (TilePos srcPos : this.provider.scaler().inputs(pos)) {
+                    long childDirty = childDirtyByPos.getLong(srcPos);
+                    if (childDirty > maxDirtyTs) {
+                        maxDirtyTs = childDirty;
+                    }
+                }
+                if (maxDirtyTs > minimumTimestamp) {
+                    handle.markDirty(maxDirtyTs);
+                }
+            });
+        }
 
         //all tiles have been scaled, mark the tasks as complete
         state.completeAll();

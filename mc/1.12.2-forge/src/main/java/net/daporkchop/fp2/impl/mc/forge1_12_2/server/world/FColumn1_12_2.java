@@ -41,6 +41,6 @@ public class FColumn1_12_2 implements FColumn {
 
     @Override
     public boolean isFullyPopulated() {
-        return this.chunk.isPopulated(); //TODO: we want to know if the neighboring chunks are populated, too!
+        return this.chunk.isTerrainPopulated() && (this.chunk.getWorld().provider.hasSkyLight() || this.chunk.isLightPopulated());
     }
 }

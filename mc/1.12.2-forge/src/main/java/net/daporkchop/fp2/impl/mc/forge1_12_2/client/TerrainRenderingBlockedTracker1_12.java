@@ -142,23 +142,31 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
             int chunkY = pos.getY() >> 4;
             int chunkZ = pos.getZ() >> 4;
 
+            assert chunkX >= minChunkX && chunkX < maxChunkX && chunkY >= minChunkY && chunkY < maxChunkY && chunkZ >= minChunkZ && chunkZ < maxChunkZ
+                    : "RenderChunk(" + chunkX + ',' + chunkY + ',' + chunkZ + ") is outside of render distance: from (" + minChunkX + ',' + minChunkY + ',' + minChunkZ + ") to (" + maxChunkX + ',' + maxChunkY + ',' + maxChunkZ + ')';
+            int gx = chunkX + offsetChunkX;
+            int gy = chunkY + offsetChunkY;
+            int gz = chunkZ + offsetChunkZ;
+            if (gx < 0 || gx >= factorChunkX || gy < 0 || gy >= factorChunkY || gz < 0 || gz >= factorChunkZ) { //the render info list may briefly contain chunks outside of the grid, e.g. immediately after a render distance change - simply ignore those
+                return;
+            }
+            int index = (gx * factorChunkY + gy) * factorChunkZ + gz;
+
             int dx = chunkX - playerChunkX;
             int dz = chunkZ - playerChunkZ;
             if (dx * dx + dz * dz > maxSafeDistSq) {
-                return; // outer edge of render distance: conservative, don't mark as blocked to prevent gaps
+                // outer edge of render distance: conservative, don't mark as blocked to prevent gaps,
+                //   but mark FLAG_VANILLA_SELECTED so inner neighbors know vanilla is rendering this chunk
+                srcFlags[index] |= FLAG_VANILLA_SELECTED;
+                return;
             }
 
             long flags = 0L;
             flags |= renderDirectionFlags(containerLocalRenderInformation);
             flags |= inFaceFlags(containerLocalRenderInformation);
 
-            flags |= FLAG_SELECTED;
-            assert chunkX >= minChunkX && chunkX < maxChunkX && chunkY >= minChunkY && chunkY < maxChunkY && chunkZ >= minChunkZ && chunkZ < maxChunkZ
-                    : "RenderChunk(" + chunkX + ',' + chunkY + ',' + chunkZ + ") is outside of render distance: from (" + minChunkX + ',' + minChunkY + ',' + minChunkZ + ") to (" + maxChunkX + ',' + maxChunkY + ',' + maxChunkZ + ')';
-            int index = ((chunkX + offsetChunkX) * factorChunkY + (chunkY + offsetChunkY)) * factorChunkZ + (chunkZ + offsetChunkZ);
-            if (index >= 0 && index < srcFlags.length) { //the render info list may briefly contain chunks outside of the grid, e.g. immediately after a render distance change - simply ignore those
-                srcFlags[index] = flags;
-            }
+            flags |= FLAG_SELECTED | FLAG_VANILLA_SELECTED;
+            srcFlags[index] |= flags;
         });
 
         //iterate over all the RenderChunks, because they indicate:
@@ -179,6 +187,9 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
             CompiledChunk compiledChunk = renderChunk.getCompiledChunk();
             if (compiledChunk != CompiledChunk.DUMMY) {
                 flags |= FLAG_BAKED;
+                if (!compiledChunk.isEmpty()) {
+                    flags |= FLAG_NONEMPTY;
+                }
                 flags |= visibilityFlags(compiledChunk);
             }
 
@@ -188,9 +199,11 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
             int chunkZ = pos.getZ() >> 4;
             assert chunkX >= minChunkX && chunkX < maxChunkX && chunkY >= minChunkY && chunkY < maxChunkY && chunkZ >= minChunkZ && chunkZ < maxChunkZ
                     : "RenderChunk(" + chunkX + ',' + chunkY + ',' + chunkZ + ") is outside of render distance: from (" + minChunkX + ',' + minChunkY + ',' + minChunkZ + ") to (" + maxChunkX + ',' + maxChunkY + ',' + maxChunkZ + ')';
-            int index = ((chunkX + offsetChunkX) * factorChunkY + (chunkY + offsetChunkY)) * factorChunkZ + (chunkZ + offsetChunkZ);
-            if (index >= 0 && index < srcFlags.length) { //(see above)
-                srcFlags[index] |= flags;
+            int gx = chunkX + offsetChunkX;
+            int gy = chunkY + offsetChunkY;
+            int gz = chunkZ + offsetChunkZ;
+            if (gx >= 0 && gx < factorChunkX && gy >= 0 && gy < factorChunkY && gz >= 0 && gz < factorChunkZ) { //(see above)
+                srcFlags[(gx * factorChunkY + gy) * factorChunkZ + gz] |= flags;
             }
         });
 

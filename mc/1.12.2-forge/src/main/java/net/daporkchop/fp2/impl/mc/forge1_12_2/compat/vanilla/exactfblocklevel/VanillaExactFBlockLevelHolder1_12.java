@@ -19,13 +19,18 @@
 
 package net.daporkchop.fp2.impl.mc.forge1_12_2.compat.vanilla.exactfblocklevel;
 
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.SneakyThrows;
+import net.daporkchop.fp2.api.event.FEventHandler;
 import net.daporkchop.fp2.core.minecraft.util.threading.asynccache.AsyncCacheNBT;
 import net.daporkchop.fp2.core.minecraft.world.chunks.AbstractChunksExactFBlockLevelHolder;
 import net.daporkchop.fp2.core.minecraft.world.chunks.AbstractPrefetchedChunksExactFBlockLevel;
+import net.daporkchop.fp2.core.server.event.ColumnSavedEvent;
+import net.daporkchop.fp2.core.server.event.TickEndEvent;
 import net.daporkchop.fp2.core.server.world.ExactFBlockLevelHolder;
 import net.daporkchop.fp2.core.server.world.level.IFarLevelServer;
 import net.daporkchop.fp2.core.util.datastructure.Datastructures;
@@ -36,8 +41,10 @@ import net.daporkchop.fp2.impl.mc.forge1_12_2.asm.interfaz.world.IMixinWorldServ
 import net.daporkchop.fp2.impl.mc.forge1_12_2.compat.vanilla.region.ThreadSafeRegionFileCache;
 import net.daporkchop.fp2.impl.mc.forge1_12_2.server.world.level.FLevelServer1_12;
 import net.daporkchop.lib.common.function.exception.ERunnable;
+import net.daporkchop.lib.common.math.BinMath;
 import net.daporkchop.lib.math.vector.Vec2i;
 import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.world.MinecraftException;
 import net.minecraft.world.WorldServer;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.storage.AnvilChunkLoader;
@@ -45,6 +52,7 @@ import net.minecraft.world.chunk.storage.AnvilChunkLoader;
 import java.io.IOException;
 import java.util.List;
 
+import static net.daporkchop.fp2.core.FP2Core.*;
 import static net.daporkchop.lib.common.util.PValidation.*;
 
 /**
@@ -53,8 +61,77 @@ import static net.daporkchop.lib.common.util.PValidation.*;
  * @author DaPorkchop_
  */
 public class VanillaExactFBlockLevelHolder1_12 extends AbstractChunksExactFBlockLevelHolder<Chunk> {
+    private static final int SYNC_TICK_INTERVAL = 4;
+    private static final int MAX_CHUNKS_SYNCED_PER_PASS = 12;
+
+    private final WorldServer mcWorld;
+    private final AnvilChunkLoader chunkLoader;
+    private final LongSet syncedPopulatedChunks = new LongOpenHashSet();
+    private int syncTickCounter = 0;
+
     public VanillaExactFBlockLevelHolder1_12(@NonNull FLevelServer1_12 level) {
         super(level, 4);
+        this.mcWorld = (WorldServer) level.implLevel();
+        this.chunkLoader = (AnvilChunkLoader) this.mcWorld.getChunkProvider().chunkLoader;
+    }
+
+    @Override
+    protected void onColumnSaved(@NonNull ColumnSavedEvent event) {
+        super.onColumnSaved(event);
+
+        if (event.column().isFullyPopulated()) {
+            long packedPos = BinMath.packXY(event.pos().x(), event.pos().y());
+            synchronized (this.syncedPopulatedChunks) {
+                this.syncedPopulatedChunks.add(packedPos);
+            }
+        }
+    }
+
+    @FEventHandler
+    private void onTickEnd(TickEndEvent event) {
+        if (this.mcWorld.disableLevelSaving || (++this.syncTickCounter % SYNC_TICK_INTERVAL) != 0) {
+            return;
+        }
+
+        boolean hasSkyLight = this.mcWorld.provider.hasSkyLight();
+        int height = this.mcWorld.provider.getActualHeight();
+        int syncedThisTick = 0;
+
+        for (Chunk chunk : this.mcWorld.getChunkProvider().getLoadedChunks()) {
+            if (chunk.isEmpty() || !chunk.isTerrainPopulated()) {
+                continue;
+            }
+            if (!hasSkyLight && (!chunk.isLightPopulated() || ChunkBlockLightFixer1_12.needsRelight(chunk, height))) {
+                continue;
+            }
+
+            long packedPos = BinMath.packXY(chunk.x, chunk.z);
+            synchronized (this.syncedPopulatedChunks) {
+                if (this.syncedPopulatedChunks.contains(packedPos)) {
+                    continue;
+                }
+            }
+
+            if (!chunk.needsSaving(false) && this.chunksExistIndex().contains(chunk.x, chunk.z)) {
+                synchronized (this.syncedPopulatedChunks) {
+                    this.syncedPopulatedChunks.add(packedPos);
+                }
+                continue;
+            }
+
+            try {
+                //AnvilChunkLoader.saveChunk serializes NBT, fires ChunkDataEvent.Save for immediate FP2 sync, and queues async disk I/O
+                this.chunkLoader.saveChunk(this.mcWorld, chunk);
+                synchronized (this.syncedPopulatedChunks) {
+                    this.syncedPopulatedChunks.add(packedPos);
+                }
+                if (++syncedThisTick >= MAX_CHUNKS_SYNCED_PER_PASS) {
+                    break;
+                }
+            } catch (IOException | MinecraftException e) {
+                fp2().log().warn("Failed to sync newly populated chunk (%d, %d) to FP2", e, chunk.x, chunk.z);
+            }
+        }
     }
 
     @Override
@@ -116,11 +193,14 @@ public class VanillaExactFBlockLevelHolder1_12 extends AbstractChunksExactFBlock
          * any light at all.</p>
          */
         private boolean isUsable(@NonNull Chunk chunk) {
-            if (!chunk.isTerrainPopulated() || !chunk.isLightPopulated()) {
+            if (!chunk.isTerrainPopulated()) {
                 return false;
             }
-            return this.world.provider.hasSkyLight()
-                    || !ChunkBlockLightFixer1_12.needsRelight(chunk, this.world.provider.getActualHeight());
+            if (this.world.provider.hasSkyLight()) {
+                return true;
+            }
+            return chunk.isLightPopulated()
+                    && !ChunkBlockLightFixer1_12.needsRelight(chunk, this.world.provider.getActualHeight());
         }
 
         @Override

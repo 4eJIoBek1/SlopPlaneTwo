@@ -91,6 +91,14 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
     protected static final int SHIFT_INFACE = SHIFT_RENDER_DIRECTIONS + SIZE_RENDER_DIRECTIONS;
     protected static final int SIZE_INFACE = BinMath.getNumBitsNeededFor((FACE_COUNT + 1) - 1);
 
+    protected static final int SHIFT_VANILLA_SELECTED = SHIFT_INFACE + SIZE_INFACE;
+    protected static final int SIZE_VANILLA_SELECTED = 1;
+    protected static final long FLAG_VANILLA_SELECTED = 1L << SHIFT_VANILLA_SELECTED;
+
+    protected static final int SHIFT_NONEMPTY = SHIFT_VANILLA_SELECTED + SIZE_VANILLA_SELECTED;
+    protected static final int SIZE_NONEMPTY = 1;
+    protected static final long FLAG_NONEMPTY = 1L << SHIFT_NONEMPTY;
+
     //visibilityFlags()
 
     protected static boolean isVisible(long flags, int inFace, int outFace, int chunkX, int chunkY, int chunkZ, int minChunkX, int maxChunkX, int minChunkY, int maxChunkY, int minChunkZ, int maxChunkZ) {
@@ -115,6 +123,31 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
 
     protected static int getInFace(long flags) {
         return (((int) (flags >>> SHIFT_INFACE)) & ((1 << SIZE_INFACE) - 1)) - 1;
+    }
+
+    protected static boolean anyOtherFaceVisibleTo(long flags, int outFace) {
+        return (flags & ((((1L << FACE_COUNT) - 1L) & ~(1L << outFace)) << (SHIFT_VISIBILITY + outFace * FACE_COUNT))) != 0L;
+    }
+
+    protected static boolean isNeighborRenderedOrSafe(long neighborFlags) {
+        //if the neighboring RenderChunk is renderable but neither baked nor selected, it means that the tile would be a valid neighbor except it hasn't yet been baked
+        //  because it's never passed the frustum check. skip these to avoid fp2 terrain drawing over vanilla along the edges of the screen when first loading a world.
+        if ((neighborFlags & (FLAG_BAKED | FLAG_RENDERABLE | FLAG_SELECTED | FLAG_VANILLA_SELECTED | FLAG_INFRUSTUM)) == FLAG_RENDERABLE) {
+            return true;
+        }
+
+        //if the neighboring RenderChunk isn't baked or wasn't visited by vanilla's visibility pass this frame, it isn't rendered and cannot seal this boundary.
+        if ((neighborFlags & (FLAG_BAKED | FLAG_RENDERABLE)) != (FLAG_BAKED | FLAG_RENDERABLE)) {
+            return false;
+        }
+
+        //if a non-empty neighbor inside the frustum didn't reach vanilla's render list, treat it as unrendered to prevent 1-block gaps.
+        if ((neighborFlags & (FLAG_NONEMPTY | FLAG_INFRUSTUM)) == (FLAG_NONEMPTY | FLAG_INFRUSTUM)
+                && (neighborFlags & (FLAG_VANILLA_SELECTED | FLAG_SELECTED)) == 0L) {
+            return false;
+        }
+
+        return true;
     }
 
     protected static int getOppositeFace(int face) {
@@ -250,26 +283,34 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
 
                         //scan neighbors to make sure none of them are un-selectable
                         for (int outFace = 0; outFace < FACE_COUNT; outFace++) {
-                            //this direction is the opposite of one of the directions that was traversed to get to this RenderChunk, skip it
-                            if (hasRenderDirection(centerFlags, getOppositeFace(outFace))) {
+                            int nx = x - offsetChunkX + FACE_OFFSETS[outFace * 3 + 0];
+                            int ny = y - offsetChunkY + FACE_OFFSETS[outFace * 3 + 1];
+                            int nz = z - offsetChunkZ + FACE_OFFSETS[outFace * 3 + 2];
+                            if (nx < minChunkX || nx >= maxChunkX
+                                    || ny < minChunkY || ny >= maxChunkY
+                                    || nz < minChunkZ || nz >= maxChunkZ) {
                                 continue;
                             }
 
-                            //the neighboring RenderChunk isn't visible from the direction that the current RenderChunk was entered from, skip it
-                            if (!isVisible(centerFlags, getOppositeFace(inFace), outFace, x - offsetChunkX, y - offsetChunkY, z - offsetChunkZ, minChunkX, maxChunkX, minChunkY, maxChunkY, minChunkZ, maxChunkZ)) {
-                                continue;
+                            //negative faces (DOWN, NORTH, WEST) share boundary faces owned by FP2 tile (x, y, z) on the neighbor's outer wall:
+                            //  check if the neighbor is actually rendered whenever any face in center can see out through outFace
+                            boolean negativeOwnerFace = (outFace & 1) == 0;
+                            boolean mustCheck = negativeOwnerFace && anyOtherFaceVisibleTo(centerFlags, outFace);
+
+                            if (!mustCheck) {
+                                //this direction is the opposite of one of the directions that was traversed to get to this RenderChunk, skip it
+                                if (hasRenderDirection(centerFlags, getOppositeFace(outFace))) {
+                                    continue;
+                                }
+
+                                //the neighboring RenderChunk isn't visible from the direction that the current RenderChunk was entered from, skip it
+                                if (!isVisible(centerFlags, getOppositeFace(inFace), outFace, x - offsetChunkX, y - offsetChunkY, z - offsetChunkZ, minChunkX, maxChunkX, minChunkY, maxChunkY, minChunkZ, maxChunkZ)) {
+                                    continue;
+                                }
                             }
 
                             long neighborFlags = srcFlags[idx + faceIndexOffsets[outFace]];
-
-                            //if the neighboring RenderChunk is renderable but neither baked nor selected, it means that the tile would be a valid neighbor except it hasn't yet been baked
-                            //  because it's never passed the frustum check. skip these to avoid fp2 terrain drawing over vanilla along the edges of the screen when first loading a world.
-                            if ((neighborFlags & (FLAG_BAKED | FLAG_RENDERABLE | FLAG_SELECTED | FLAG_INFRUSTUM)) == (FLAG_RENDERABLE)) {
-                                continue;
-                            }
-
-                            //if the neighboring RenderChunk isn't baked, the current RenderChunk has at least one neighbor which isn't rendered and is therefore unable to block fp2 rendering.
-                            if ((neighborFlags & (FLAG_BAKED)) == 0) {
+                            if (!isNeighborRenderedOrSafe(neighborFlags)) {
                                 out = false;
                                 break;
                             }
