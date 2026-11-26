@@ -299,7 +299,10 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
                             renderabilityDirty = DirectTilePosAccess.newPositionHashSet();
                         }
                         renderabilityDirty.add(pos);
-                        pos.up().allPositionsInBB(1, 1).forEach(renderabilityDirty::add);
+                        TilePos parentBase = pos.up();
+                        if (parentBase.isLevelValid()) {
+                            parentBase.allPositionsInBB(1, 1).forEach(renderabilityDirty::add);
+                        }
                     }
                 }
                 if (renderabilityDirty != null) {

@@ -45,6 +45,7 @@ import net.minecraft.client.gui.GuiIngameMenu;
 import net.minecraft.client.gui.GuiMainMenu;
 import net.minecraft.client.gui.GuiVideoSettings;
 import net.minecraft.client.network.NetHandlerPlayClient;
+import net.minecraft.client.renderer.OpenGlHelper;
 import net.minecraft.client.settings.KeyBinding;
 import net.minecraft.util.text.TextComponentString;
 import net.minecraftforge.client.event.GuiScreenEvent;
@@ -56,6 +57,8 @@ import net.minecraftforge.fml.common.eventhandler.EventPriority;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.InputEvent;
 import org.lwjgl.input.Keyboard;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL30;
 
 import java.util.IdentityHashMap;
 import java.util.Map;
@@ -79,6 +82,30 @@ public class FP2Client1_12 extends FP2Client {
 
     private final Map<KeyBinding, Runnable> keyBindings = new IdentityHashMap<>();
 
+    private static int queryDefaultFramebufferStencilBits() {
+        int prevDrawFbo = GL11.glGetInteger(GL30.GL_DRAW_FRAMEBUFFER_BINDING);
+        if (prevDrawFbo != 0) {
+            GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, 0);
+        }
+        try {
+            int bits = GL11.glGetInteger(GL11.GL_STENCIL_BITS);
+            if (bits == 0) {
+                int type = GL30.glGetFramebufferAttachmentParameteri(GL30.GL_DRAW_FRAMEBUFFER, GL11.GL_STENCIL, GL30.GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE);
+                if (type != GL11.GL_NONE) {
+                    bits = GL30.glGetFramebufferAttachmentParameteri(GL30.GL_DRAW_FRAMEBUFFER, GL11.GL_STENCIL, GL30.GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE);
+                }
+            }
+            while (GL11.glGetError() != GL11.GL_NO_ERROR) {
+                //drain any benign GL error from querying legacy GL_STENCIL_BITS on strict profiles
+            }
+            return bits;
+        } finally {
+            if (prevDrawFbo != 0) {
+                GL30.glBindFramebuffer(GL30.GL_DRAW_FRAMEBUFFER, prevDrawFbo);
+            }
+        }
+    }
+
     @Override
     public void init(@NonNull FutureExecutor clientThreadExecutor) {
         //set chat logger
@@ -97,14 +124,23 @@ public class FP2Client1_12 extends FP2Client {
         MinecraftForge.EVENT_BUS.register(this);
 
         //enable stencil buffer
-        if (!this.mc.getFramebuffer().isStencilEnabled() && !this.mc.getFramebuffer().enableStencil()) {
-            if (OF && (PUnsafe.getBoolean(this.mc.gameSettings, OF_FASTRENDER_OFFSET) || PUnsafe.getInt(this.mc.gameSettings, OF_AALEVEL_OFFSET) > 0)) {
-                this.fp2().unsupported("FarPlaneTwo was unable to enable the OpenGL stencil buffer!\n"
+        if (OpenGlHelper.isFramebufferEnabled()) {
+            if (!this.mc.getFramebuffer().isStencilEnabled() && !this.mc.getFramebuffer().enableStencil()) {
+                this.fp2().unsupported("Unable to enable the OpenGL stencil buffer!\nRequired by FarPlaneTwo.");
+            }
+        } else {
+            //Minecraft's FBO is disabled (e.g. OptiFine "Fast Render", "Antialiasing", or fboEnable=false),
+            //  so rendering goes directly to the default framebuffer (FBO 0), for which MixinMinecraft1_12 already requested 8 stencil bits.
+            int defaultStencilBits = queryDefaultFramebufferStencilBits();
+            if (defaultStencilBits >= 8) {
+                this.fp2().log().info("Minecraft FBO is disabled; using default OpenGL framebuffer stencil buffer (%d bits).", defaultStencilBits);
+            } else if (OF && (PUnsafe.getBoolean(this.mc.gameSettings, OF_FASTRENDER_OFFSET) || PUnsafe.getInt(this.mc.gameSettings, OF_AALEVEL_OFFSET) > 0)) {
+                this.fp2().unsupported("FarPlaneTwo was unable to enable the OpenGL stencil buffer (default framebuffer has " + defaultStencilBits + " stencil bits)!\n"
                                        + "Please launch the game without FarPlaneTwo and disable\n"
                                        + "  OptiFine's \"Fast Render\" and \"Antialiasing\", then\n"
                                        + "  try again.");
             } else {
-                this.fp2().unsupported("Unable to enable the OpenGL stencil buffer!\nRequired by FarPlaneTwo.");
+                this.fp2().unsupported("Unable to enable the OpenGL stencil buffer (default framebuffer has " + defaultStencilBits + " stencil bits)!\nRequired by FarPlaneTwo.");
             }
         }
 

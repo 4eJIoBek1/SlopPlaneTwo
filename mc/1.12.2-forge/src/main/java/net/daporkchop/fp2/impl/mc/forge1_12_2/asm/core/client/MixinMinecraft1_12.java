@@ -22,6 +22,8 @@ package net.daporkchop.fp2.impl.mc.forge1_12_2.asm.core.client;
 import net.daporkchop.fp2.core.client.player.IFarPlayerClient;
 import net.daporkchop.fp2.impl.mc.forge1_12_2.util.threading.futureexecutor.ClientThreadMarkedFutureExecutor1_12;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.OpenGlHelper;
+import net.minecraft.client.shader.Framebuffer;
 import net.minecraft.profiler.Profiler;
 import org.lwjgl.opengl.PixelFormat;
 import org.objectweb.asm.Opcodes;
@@ -70,6 +72,16 @@ public abstract class MixinMinecraft1_12 implements ClientThreadMarkedFutureExec
         return this.fp2_executor;
     }
 
+    @Unique
+    private void fp2_ensureFramebufferStencil() {
+        if (OpenGlHelper.isFramebufferEnabled()) {
+            Framebuffer fb = ((Minecraft) uncheckedCast(this)).getFramebuffer();
+            if (fb != null && !fb.isStencilEnabled()) {
+                fb.enableStencil();
+            }
+        }
+    }
+
     @Inject(method = "Lnet/minecraft/client/Minecraft;runGameLoop()V",
             at = @At(value = "INVOKE",
                     target = "Lnet/minecraft/profiler/Profiler;startSection(Ljava/lang/String;)V",
@@ -77,6 +89,7 @@ public abstract class MixinMinecraft1_12 implements ClientThreadMarkedFutureExec
                     shift = At.Shift.BEFORE),
             allow = 1)
     private void fp2_runGameLoop_runScheduledClientTasks(CallbackInfo ci) {
+        this.fp2_ensureFramebufferStencil();
         this.profiler.startSection("fp2_scheduled_tasks");
         this.fp2_executor.doAllWork();
         this.profiler.endSection();
@@ -123,6 +136,7 @@ public abstract class MixinMinecraft1_12 implements ClientThreadMarkedFutureExec
             at = @At("RETURN"),
             require = 1, allow = 1)
     private void fp2_updateFramebufferSize_notifyFramebufferResize(CallbackInfo ci) {
+        this.fp2_ensureFramebufferStencil();
         fp2().client().framebufferResizeListeners().dispatcher().onFramebufferResize(this.displayWidth, this.displayHeight);
     }
 }
