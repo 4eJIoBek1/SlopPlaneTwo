@@ -151,7 +151,7 @@ public abstract class AbstractFarPlayerClient<F extends FP2Core> implements IFar
         checkState(this.sessionOpen, "no session is currently open!");
         checkState(this.context != null, "active session has no render mode!");
 
-        packet.tiles.forEach(this.context.tileCache()::receiveTile);
+        this.context.tileCache().receiveTiles(packet.tiles);
     }
 
     @CalledWithMonitor
@@ -159,7 +159,7 @@ public abstract class AbstractFarPlayerClient<F extends FP2Core> implements IFar
         checkState(this.sessionOpen, "no session is currently open!");
         checkState(this.context != null, "active session has no render mode!");
 
-        packet.positions.forEach(this.context.tileCache()::unloadTile);
+        this.context.tileCache().unloadTiles(packet.positions);
     }
 
     @CalledWithMonitor

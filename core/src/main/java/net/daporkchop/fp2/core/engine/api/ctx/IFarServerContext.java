@@ -94,6 +94,18 @@ public interface IFarServerContext extends AutoCloseable {
     void sendTile(@TransferOwnership @NonNull TileSnapshot snapshot);
 
     /**
+     * Sends an update for an already-loaded tile to the client.
+     * <p>
+     * Implementations may briefly coalesce updates produced during the same tick so adjacent tiles arrive together.
+     * Ownership is transferred to this method.
+     *
+     * @param snapshot a snapshot of the updated tile data
+     */
+    default void sendTileUpdate(@TransferOwnership @NonNull TileSnapshot snapshot) {
+        this.sendTile(snapshot);
+    }
+
+    /**
      * Unloads the tile at the given position on the client.
      *
      * @param pos the position of the tile to unload

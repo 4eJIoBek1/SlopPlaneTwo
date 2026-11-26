@@ -343,15 +343,17 @@ public final class Tracker {
     @CalledFromAnyThread
     void notifyChanged(@BorrowOwnership @NonNull ITileSnapshot snapshot) {
         try {
-            this.context.sendTile((TileSnapshot) snapshot);
-
             TilePos pos = snapshot.pos();
             if (this.waitingPositions.contains(pos)) { //this tile has been initially loaded
+                this.context.sendTile((TileSnapshot) snapshot);
+
                 //mark the position as done waiting
                 checkState(this.doneWaitingPositions.add(pos), "couldn't mark completed position as done waiting: ", pos);
 
                 //try to fill up the load queue again to compensate for the removal of this position
                 this.updateWaiting();
+            } else {
+                this.context.sendTileUpdate((TileSnapshot) snapshot);
             }
         } catch (Throwable t) {
             this.context.tileProvider().world().workerManager().handle(t);

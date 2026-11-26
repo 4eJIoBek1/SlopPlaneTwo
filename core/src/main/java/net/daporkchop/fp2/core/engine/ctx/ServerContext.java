@@ -36,8 +36,11 @@ import net.daporkchop.fp2.core.server.world.level.IFarLevelServer;
 import net.daporkchop.fp2.core.util.annotation.CalledFromServerThread;
 import net.daporkchop.lib.common.annotation.TransferOwnership;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -50,6 +53,8 @@ import static net.daporkchop.lib.common.util.PValidation.*;
  */
 @Getter
 public class ServerContext implements IFarServerContext {
+    protected static final long MAX_UPDATE_BATCH_BYTES = 256L * 1024L;
+
     protected final IFarPlayerServer player;
     protected final IFarLevelServer world;
     protected final IFarTileProvider tileProvider;
@@ -58,6 +63,7 @@ public class ServerContext implements IFarServerContext {
 
     protected Set<TilePos> unloadTilesQueue = DirectTilePosAccess.newPositionHashSet();
     protected final Map<TilePos, TileSnapshot> sendTilesQueue = DirectTilePosAccess.newPositionKeyedLinkedHashMap();
+    protected final Map<TilePos, TileSnapshot> pendingUpdateTiles = DirectTilePosAccess.newPositionKeyedLinkedHashMap();
 
     protected FP2Config config;
 
@@ -98,7 +104,7 @@ public class ServerContext implements IFarServerContext {
         //check if the send queue contains any items to see if any additional work is necessary.
         // this is safe to call without synchronization: it only accesses the map size, which involves reading a single int field. the worst that can happen is we miss a
         // queued tile for one tick.
-        if (this.unloadTilesQueue.isEmpty() && this.sendTilesQueue.isEmpty()) {
+        if (this.unloadTilesQueue.isEmpty() && this.sendTilesQueue.isEmpty() && this.pendingUpdateTiles.isEmpty()) {
             //the send queue is empty, nothing to do!
             return;
         }
@@ -112,7 +118,7 @@ public class ServerContext implements IFarServerContext {
                 this.unloadTilesQueue = DirectTilePosAccess.newPositionHashSet(); //replace with a new set
             }
 
-            loadedTilesCount = this.trySendTiles();
+            loadedTilesCount = this.trySendPendingUpdates() + this.trySendTiles();
         }
 
         if (loadedTilesCount != 0) {
@@ -158,11 +164,25 @@ public class ServerContext implements IFarServerContext {
 
         synchronized (this) {
             this.unloadTilesQueue.remove(snapshot.pos());
+            this.pendingUpdateTiles.remove(snapshot.pos());
             if (this.sendTilesQueue.isEmpty() && this.player.fp2_IFarPlayer_flowControl().mayWrite(snapshot.dataSize())) {
                 this.player.fp2_IFarPlayer_sendPacket(SPacketTileData.create(Collections.singletonList(snapshot)), this.sentHandler());
             } else {
                 this.sendTilesQueue.put(snapshot.pos(), snapshot);
             }
+        }
+    }
+
+    @Override
+    public void sendTileUpdate(@TransferOwnership @NonNull TileSnapshot snapshot) {
+        if (this.closed) { //this context has been closed - silently discard all tile data
+            return;
+        }
+
+        synchronized (this) {
+            this.unloadTilesQueue.remove(snapshot.pos());
+            this.sendTilesQueue.remove(snapshot.pos());
+            this.pendingUpdateTiles.put(snapshot.pos(), snapshot);
         }
     }
 
@@ -179,12 +199,73 @@ public class ServerContext implements IFarServerContext {
                 this.tracker.notifyTilesSent();
 
                 try {
+                    this.trySendPendingUpdates();
                     this.trySendTiles();
                 } catch (Throwable t) {
                     t.printStackTrace();
                 }
             }
         };
+    }
+
+    private synchronized int trySendPendingUpdates() {
+        if (this.sendingTiles || this.pendingUpdateTiles.isEmpty()) {
+            return 0;
+        }
+
+        long currentTick = this.world.timestamp();
+        List<TileSnapshot> ready = null;
+        for (TileSnapshot snapshot : this.pendingUpdateTiles.values()) {
+            if (snapshot.timestamp() < currentTick) {
+                if (ready == null) {
+                    ready = new ArrayList<>();
+                }
+                ready.add(snapshot);
+            }
+        }
+        if (ready == null) {
+            return 0;
+        }
+
+        if (ready.size() > 1) {
+            ready.sort(Comparator.comparingInt(s -> s.pos().level()));
+        }
+
+        int sentTiles = 0;
+        this.sendingTiles = true;
+        try {
+            List<TileSnapshot> batch = new ArrayList<>();
+            long batchBytes = 0L;
+
+            for (int i = 0, n = ready.size(); i < n; i++) {
+                TileSnapshot tile = ready.get(i);
+                long tileBytes = tile.dataSize();
+
+                if (!batch.isEmpty() && (batchBytes + tileBytes > MAX_UPDATE_BATCH_BYTES
+                        || !this.player.fp2_IFarPlayer_flowControl().mayWrite(batchBytes + tileBytes))) {
+                    this.player.fp2_IFarPlayer_sendPacket(SPacketTileData.create(batch), this.sentHandler());
+                    batch = new ArrayList<>();
+                    batchBytes = 0L;
+                }
+
+                if (batch.isEmpty() && !this.player.fp2_IFarPlayer_flowControl().mayWrite(tileBytes)) {
+                    break;
+                }
+
+                this.pendingUpdateTiles.remove(tile.pos());
+                batch.add(tile);
+                batchBytes += tileBytes;
+                sentTiles++;
+            }
+
+            if (!batch.isEmpty()) {
+                this.player.fp2_IFarPlayer_sendPacket(SPacketTileData.create(batch), this.sentHandler());
+            }
+
+            return sentTiles;
+        } finally {
+            this.sendingTiles = false;
+        }
     }
 
     private synchronized int trySendTiles() {
@@ -224,6 +305,7 @@ public class ServerContext implements IFarServerContext {
         synchronized (this) {
             if (this.unloadTilesQueue.add(pos)) {
                 this.sendTilesQueue.remove(pos);
+                this.pendingUpdateTiles.remove(pos);
             }
         }
     }

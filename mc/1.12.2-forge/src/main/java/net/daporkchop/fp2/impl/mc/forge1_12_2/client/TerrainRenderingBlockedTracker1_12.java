@@ -33,6 +33,9 @@ import net.minecraft.client.renderer.chunk.CompiledChunk;
 import net.minecraft.client.renderer.culling.ICamera;
 import net.minecraft.util.EnumFacing;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.World;
+import net.minecraft.world.chunk.Chunk;
+import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
@@ -96,7 +99,8 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
     public void update(@NonNull RenderGlobal renderGlobal, @NonNull ICamera camera, int frameCount) {
         //figure out the maximum extents of all of the renderChunks in the current ViewFrustum
         ViewFrustum viewFrustum = ((ATRenderGlobal1_12) renderGlobal).getViewFrustum();
-        boolean cubic = FP2CubicChunks1_12.isCubicWorld(((ATViewFrustum1_12) viewFrustum).getWorld());
+        World world = ((ATViewFrustum1_12) viewFrustum).getWorld();
+        boolean cubic = FP2CubicChunks1_12.isCubicWorld(world);
         int sizeX = ((ATViewFrustum1_12) viewFrustum).getCountChunksX();
         int sizeY = ((ATViewFrustum1_12) viewFrustum).getCountChunksY();
         int sizeZ = ((ATViewFrustum1_12) viewFrustum).getCountChunksZ();
@@ -131,8 +135,14 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
         int playerChunkZ = renderPosZ >> 4;
         int renderDist = net.minecraft.client.Minecraft.getMinecraft().gameSettings.renderDistanceChunks;
         int maxSafeDistSq = Math.max(0, renderDist - 1) * Math.max(0, renderDist - 1);
+        net.minecraft.entity.Entity viewEntity = net.minecraft.client.Minecraft.getMinecraft().getRenderViewEntity();
+        int camChunkX = viewEntity != null ? floorI(viewEntity.posX) >> 4 : floorI(((ATRenderGlobal1_12) renderGlobal).getFrustumUpdatePosX()) >> 4;
+        int camChunkY = viewEntity != null ? floorI(viewEntity.posY + viewEntity.getEyeHeight()) >> 4 : floorI(((ATRenderGlobal1_12) renderGlobal).getFrustumUpdatePosY()) >> 4;
+        int camChunkZ = viewEntity != null ? floorI(viewEntity.posZ) >> 4 : floorI(((ATRenderGlobal1_12) renderGlobal).getFrustumUpdatePosZ()) >> 4;
 
         long[] srcFlags = new long[factorChunkX * factorChunkY * factorChunkZ];
+        Chunk[] loadedColumns = cubic ? null : new Chunk[factorChunkX * factorChunkZ];
+        boolean[] columnChecked = cubic ? null : new boolean[factorChunkX * factorChunkZ];
         //iterate over all the ContainerLocalRenderInformation instances, because they indicate:
         // - which direction to enter a RenderChunk from
         // - whether or not a RenderChunk is actually selected to be rendered
@@ -164,6 +174,10 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
             long flags = 0L;
             flags |= renderDirectionFlags(containerLocalRenderInformation);
             flags |= inFaceFlags(containerLocalRenderInformation);
+            if (containerLocalRenderInformation.getFacing() == null
+                    && (Math.abs(chunkX - camChunkX) > 1 || Math.abs(chunkY - camChunkY) > 1 || Math.abs(chunkZ - camChunkZ) > 1)) {
+                flags |= FLAG_EXTERNAL_SEED;
+            }
 
             flags |= FLAG_SELECTED | FLAG_VANILLA_SELECTED;
             srcFlags[index] |= flags;
@@ -203,6 +217,20 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
             int gy = chunkY + offsetChunkY;
             int gz = chunkZ + offsetChunkZ;
             if (gx >= 0 && gx < factorChunkX && gy >= 0 && gy < factorChunkY && gz >= 0 && gz < factorChunkZ) { //(see above)
+                if (!cubic && (compiledChunk == CompiledChunk.DUMMY || compiledChunk.isEmpty())) {
+                    int colIdx = gx * factorChunkZ + gz;
+                    if (!columnChecked[colIdx]) {
+                        columnChecked[colIdx] = true;
+                        loadedColumns[colIdx] = world.getChunkProvider().getLoadedChunk(chunkX, chunkZ);
+                    }
+                    Chunk chunk = loadedColumns[colIdx];
+                    if (chunk != null && !chunk.isEmpty()) {
+                        ExtendedBlockStorage[] sections = chunk.getBlockStorageArray();
+                        if (chunkY >= 0 && chunkY < sections.length && (sections[chunkY] == null || sections[chunkY].isEmpty())) {
+                            flags |= FLAG_VERIFIED_EMPTY;
+                        }
+                    }
+                }
                 srcFlags[(gx * factorChunkY + gy) * factorChunkZ + gz] |= flags;
             }
         });

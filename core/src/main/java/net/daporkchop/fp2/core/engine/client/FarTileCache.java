@@ -21,6 +21,7 @@ package net.daporkchop.fp2.core.engine.client;
 
 import lombok.Data;
 import lombok.NonNull;
+import net.daporkchop.fp2.core.engine.DirectTilePosAccess;
 import net.daporkchop.fp2.core.engine.TilePos;
 import net.daporkchop.fp2.core.engine.tile.CompressedTileSnapshot;
 import net.daporkchop.fp2.core.engine.tile.ITileSnapshot;
@@ -29,6 +30,7 @@ import net.daporkchop.lib.common.annotation.param.NotNegative;
 import net.daporkchop.lib.common.misc.release.AbstractReleasable;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -59,10 +61,34 @@ public final class FarTileCache extends AbstractReleasable {
         this.assertNotReleased();
         this.tiles.compute(tile.pos(), (pos, old) -> {
             this.debug_updateStats(old, tile);
-
-            this.listeners.dispatcher().tileChanged(pos);
             return tile;
         });
+        this.listeners.dispatcher().tileChanged(tile.pos());
+    }
+
+    /**
+     * Inserts all tiles in the batch into the cache before notifying listeners so adjacent tiles are mutually visible when baking begins.
+     *
+     * @param tiles the tiles to add
+     */
+    public void receiveTiles(@NonNull List<? extends ITileSnapshot> tiles) {
+        this.assertNotReleased();
+        if (tiles.isEmpty()) {
+            return;
+        } else if (tiles.size() == 1) {
+            this.receiveTile(tiles.get(0));
+            return;
+        }
+
+        Set<TilePos> changed = DirectTilePosAccess.newPositionHashSet();
+        for (ITileSnapshot tile : tiles) {
+            this.tiles.compute(tile.pos(), (pos, old) -> {
+                this.debug_updateStats(old, tile);
+                return tile;
+            });
+            changed.add(tile.pos());
+        }
+        this.listeners.dispatcher().tilesChanged(changed);
     }
 
     /**
@@ -87,12 +113,39 @@ public final class FarTileCache extends AbstractReleasable {
 
     public void unloadTile(@NonNull TilePos _pos) {
         this.assertNotReleased();
+        boolean[] removed = new boolean[1];
         this.tiles.computeIfPresent(_pos, (pos, old) -> {
             this.debug_updateStats(old, null);
-
-            this.listeners.dispatcher().tileChanged(pos);
+            removed[0] = true;
             return null;
         });
+        if (removed[0]) {
+            this.listeners.dispatcher().tileChanged(_pos);
+        }
+    }
+
+    /**
+     * Removes all given tile positions from the cache before notifying listeners.
+     *
+     * @param positions the positions of the tiles to remove
+     */
+    public void unloadTiles(@NonNull Collection<TilePos> positions) {
+        this.assertNotReleased();
+        if (positions.isEmpty()) {
+            return;
+        }
+
+        Set<TilePos> removed = DirectTilePosAccess.newPositionHashSet();
+        for (TilePos _pos : positions) {
+            this.tiles.computeIfPresent(_pos, (pos, old) -> {
+                this.debug_updateStats(old, null);
+                removed.add(pos);
+                return null;
+            });
+        }
+        if (!removed.isEmpty()) {
+            this.listeners.dispatcher().tilesChanged(removed);
+        }
     }
 
     /**

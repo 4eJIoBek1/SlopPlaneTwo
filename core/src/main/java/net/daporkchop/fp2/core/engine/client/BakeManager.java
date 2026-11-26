@@ -41,10 +41,11 @@ import net.daporkchop.lib.common.misc.release.AbstractReleasable;
 import net.daporkchop.lib.common.misc.threadfactory.PThreadFactories;
 import net.daporkchop.lib.common.pool.recycler.Recycler;
 
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Semaphore;
 import java.util.function.Consumer;
 
@@ -55,6 +56,27 @@ import static net.daporkchop.lib.common.util.PValidation.*;
  * @author DaPorkchop_
  */
 public final class BakeManager<VertexType extends AttributeStruct> extends AbstractReleasable implements FarTileCache.Listener, Consumer<TilePos> {
+    private static final class PendingBake<VertexType extends AttributeStruct> implements AutoCloseable {
+        final BakeOutput<VertexType> output;
+        final boolean present;
+
+        PendingBake(BakeOutput<VertexType> output, boolean present) {
+            this.output = output;
+            this.present = present;
+        }
+
+        long sizeBytes() {
+            return this.output != null ? this.output.sizeBytes() : 0L;
+        }
+
+        @Override
+        public void close() {
+            if (this.output != null) {
+                this.output.close();
+            }
+        }
+    }
+
     private final AbstractFarRenderer<VertexType> renderer;
 
     private final FarTileCache tileCache;
@@ -65,8 +87,8 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
 
     private final ListenerList<FarTileCache.Listener>.Handle tileCacheListenerHandle;
 
-    private final Map<TilePos, Optional<BakeOutput<VertexType>>> pendingDataUpdates = DirectTilePosAccess.newPositionKeyedConcurrentHashMap();
-    private final Map<TilePos, Boolean> pendingRenderableUpdates = DirectTilePosAccess.newPositionKeyedConcurrentHashMap();
+    private final Map<TilePos, PendingBake<VertexType>> pendingDataUpdates = DirectTilePosAccess.newPositionKeyedConcurrentHashMap();
+    private final Set<TilePos> uploadedTiles = DirectTilePosAccess.newPositionHashSet();
     private final Semaphore dataUpdatesLock = new Semaphore(fp2().globalConfig().performance().maxBakesProcessedPerFrame());
 
     public BakeManager(@NonNull AbstractFarRenderer<VertexType> renderer, @NonNull FarTileCache tileCache, @NonNull IRenderBaker<VertexType> baker) {
@@ -99,8 +121,8 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
 
         //release all of the bake outputs and remove them from the map
         for (Iterator<TilePos> itr = this.pendingDataUpdates.keySet().iterator(); itr.hasNext(); ) {
-            this.pendingDataUpdates.computeIfPresent(itr.next(), (pos, output) -> {
-                output.ifPresent(BakeOutput::close);
+            this.pendingDataUpdates.computeIfPresent(itr.next(), (pos, pending) -> {
+                pending.close();
                 return null;
             });
         }
@@ -119,6 +141,22 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
         });
     }
 
+    @Override
+    public void tilesChanged(@NonNull Set<TilePos> positions) {
+        if (positions.isEmpty()) {
+            return;
+        }
+        Set<TilePos> outputs = DirectTilePosAccess.newPositionHashSet();
+        for (TilePos pos : positions) {
+            this.baker.bakeOutputs(pos).forEach(outputPos -> {
+                if (outputPos.isLevelValid()) {
+                    outputs.add(outputPos);
+                }
+            });
+        }
+        outputs.forEach(this.bakeScheduler::schedule);
+    }
+
     /**
      * Bakes the tile at the given position.
      *
@@ -127,9 +165,6 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
     @Override
     @Deprecated
     public void accept(@NonNull TilePos pos) { //this function is called from inside of bakeScheduler, which doesn't execute the task multiple times on the same position
-        this.checkSelfRenderable(pos);
-        this.checkParentsRenderable(pos);
-
         //get the list of input tile positions
         List<TilePos> inputTilePositions = this.baker.bakeInputs(pos);
 
@@ -142,9 +177,12 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
                 .toArray(new ITileSnapshot[inputTilePositions.size()]);
 
         //fast path: if the provoking tile was unloaded or is empty, we can skip baking it entirely
-        if (compressedInputTiles[provokingTilePositionInputIndex] == null //tile isn't cached any more
-            || compressedInputTiles[provokingTilePositionInputIndex].isEmpty()) { //tile data is empty
-            this.updateData(pos, Optional.empty());
+        ITileSnapshot provoking = compressedInputTiles[provokingTilePositionInputIndex];
+        if (provoking == null) { //tile isn't cached any more
+            this.updateData(pos, new PendingBake<>(null, false));
+            return;
+        } else if (provoking.isEmpty()) { //tile data is empty
+            this.updateData(pos, new PendingBake<>(null, true));
             return;
         }
 
@@ -161,16 +199,12 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
             try {
                 this.baker.bake(pos, srcs, output);
 
-                Optional<BakeOutput<VertexType>> optionalOutput;
                 if (output.isEmpty()) {
                     output.close();
                     output = null;
-                    optionalOutput = Optional.empty();
-                } else {
-                    optionalOutput = Optional.of(output);
                 }
 
-                this.updateData(pos, optionalOutput);
+                this.updateData(pos, new PendingBake<>(output, true));
             } catch (Throwable t) {
                 if (output != null) {
                     output.close();
@@ -188,41 +222,14 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
         this.tileCache.tryCompressExistingTile(pos);
     }
 
-    private void checkParentsRenderable(@NonNull TilePos posIn) {
-        posIn.up().allPositionsInBB(1, 1).forEach(this::checkSelfRenderable);
-    }
-
-    private void checkSelfRenderable(@NonNull TilePos pos) {
-        if (!pos.isLevelValid()) { //skip positions at invalid zoom levels (e.g. the parent of a tile at the highest available level)
-            return;
-        }
-
-        if (this.coordLimits.contains(pos)) {
-            //TODO: determining if a tile is renderable is currently pretty inefficient, maybe we can do it better (e.g. using Int3HashSet#countInRange() or a reference-counting index)
-            //this.updateRenderable(pos,
-            //        this.tileCache.getTileCached(pos) == null
-            //                && (pos.level() == 0 || pos.down().allPositionsInBB(1, 3).anyMatch(p -> this.coordLimits.contains(p) && this.tileCache.getTileCached(p) == null)));
-
-            //condition changed now that tiles default to being shown rather than hidden
-            this.updateRenderable(pos,
-                    pos.level() == 0 //level-0 tiles are always shown
-                    || this.tileCache.getTileCached(pos) == null //if the tile isn't loaded, mark it as shown to prune unused entries from the render index's hidden set
-                    || pos.down().allPositionsInBB(1, 3).anyMatch(p -> this.coordLimits.contains(p) && this.tileCache.getTileCached(p) == null));
-        }
-    }
-
-    private void updateData(@NonNull TilePos pos, @NonNull Optional<BakeOutput<VertexType>> optionalBakeOutput) throws InterruptedException {
+    private void updateData(@NonNull TilePos pos, @NonNull PendingBake<VertexType> pendingBake) throws InterruptedException {
         BlockingSupport.managedAcquire(this.dataUpdatesLock, 1);
 
-        this.pendingDataUpdates.merge(pos, optionalBakeOutput, (oldOutput, newOutput) -> {
+        this.pendingDataUpdates.merge(pos, pendingBake, (oldBake, newBake) -> {
             //release old bake output to avoid potential memory leak when silently replacing entries
-            oldOutput.ifPresent(BakeOutput::close);
-            return newOutput;
+            oldBake.close();
+            return newBake;
         });
-    }
-
-    private void updateRenderable(@NonNull TilePos pos, boolean renderable) {
-        this.pendingRenderableUpdates.put(pos, renderable);
     }
 
     /**
@@ -240,17 +247,22 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
 
             //pre-allocate a bit of extra space in case it grows while we're iterating
             Map<TilePos, BakeOutput<VertexType>> dataUpdates = DirectTilePosAccess.newPositionKeyedHashMap(dataUpdatesCount + (dataUpdatesCount >> 3));
+            List<TilePos> poppedPositions = new ArrayList<>(dataUpdatesCount);
+            List<Boolean> poppedPresent = new ArrayList<>(dataUpdatesCount);
 
             //the total size (in bytes) of the data which is queued to be sent to the GPU
             long dataUploadSize = 0L;
             try {
                 UPDATES_LOOP:
                 for (TilePos pos : this.pendingDataUpdates.keySet()) {
-                    Optional<BakeOutput<VertexType>> optionalValue;
+                    PendingBake<VertexType> pending;
                     do {
-                        optionalValue = this.pendingDataUpdates.get(pos);
-                        if (optionalValue.isPresent()) {
-                            long dataSize = optionalValue.get().sizeBytes();
+                        pending = this.pendingDataUpdates.get(pos);
+                        if (pending == null) {
+                            continue UPDATES_LOOP;
+                        }
+                        if (pending.output != null) {
+                            long dataSize = pending.output.sizeBytes();
 
                             if (dataSize > maximumBufferUploaderCapacity) {
                                 //this tile will always exceed the buffer uploader's non-blocking capacity, so we may as well upload it as soon as possible
@@ -263,16 +275,47 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
                                 break UPDATES_LOOP;
                             }
                         }
-                    } while (!this.pendingDataUpdates.remove(pos, optionalValue));
+                    } while (!this.pendingDataUpdates.remove(pos, pending));
 
-                    dataUploadSize += optionalValue.map(BakeOutput::sizeBytes).orElse(0L);
-                    dataUpdates.put(pos, optionalValue.orElse(null));
+                    dataUploadSize += pending.sizeBytes();
+                    dataUpdates.put(pos, pending.output);
+                    poppedPositions.add(pos);
+                    poppedPresent.add(pending.present);
                 }
 
                 //execute the bulk tile data update
                 bakeStorage.update(dataUpdates);
                 renderIndex.notifyTilesChanged(dataUpdates.keySet());
                 bufferUploader.flush();
+
+                //update renderable/hidden state only after the baked meshes are actually uploaded, preventing coarse parents from hiding prematurely
+                Set<TilePos> renderabilityDirty = null;
+                for (int i = 0, n = poppedPositions.size(); i < n; i++) {
+                    TilePos pos = poppedPositions.get(i);
+                    boolean nowPresent = poppedPresent.get(i) && this.tileCache.getTileCached(pos) != null;
+                    boolean changed = nowPresent ? this.uploadedTiles.add(pos) : this.uploadedTiles.remove(pos);
+                    if (changed) {
+                        if (renderabilityDirty == null) {
+                            renderabilityDirty = DirectTilePosAccess.newPositionHashSet();
+                        }
+                        renderabilityDirty.add(pos);
+                        pos.up().allPositionsInBB(1, 1).forEach(renderabilityDirty::add);
+                    }
+                }
+                if (renderabilityDirty != null) {
+                    val hidden = DirectTilePosAccess.newPositionHashSet();
+                    val shown = DirectTilePosAccess.newPositionHashSet();
+                    for (TilePos pos : renderabilityDirty) {
+                        if (!pos.isLevelValid() || !this.coordLimits.contains(pos)) {
+                            continue;
+                        }
+                        boolean renderable = pos.level() == 0
+                                || !this.uploadedTiles.contains(pos)
+                                || pos.down().allPositionsInBB(1, 3).anyMatch(child -> this.coordLimits.contains(child) && !this.uploadedTiles.contains(child));
+                        (renderable ? shown : hidden).add(pos);
+                    }
+                    renderIndex.updateHidden(hidden, shown);
+                }
             } finally {
                 //release all bake outputs (which are still sitting around in memory, and we now own the handles to)
                 PResourceUtil.closeAll(dataUpdates.values());
@@ -281,16 +324,6 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
             //this is the best we can do of resetting a semaphore to its initial permit count
             this.dataUpdatesLock.drainPermits();
             this.dataUpdatesLock.release(Math.max(fp2().globalConfig().performance().maxBakesProcessedPerFrame() - this.pendingDataUpdates.size(), 0));
-        }
-
-        if (!this.pendingRenderableUpdates.isEmpty()) {
-            //iterate over the renderable updates, sort them into separate sets and notify the render index
-            val hidden = DirectTilePosAccess.newPositionHashSet();
-            val shown = DirectTilePosAccess.newPositionHashSet();
-            for (TilePos pos : this.pendingRenderableUpdates.keySet()) {
-                (this.pendingRenderableUpdates.remove(pos) ? shown : hidden).add(pos);
-            }
-            renderIndex.updateHidden(hidden, shown);
         }
     }
 }

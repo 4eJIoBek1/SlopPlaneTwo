@@ -43,6 +43,7 @@ import net.daporkchop.fp2.impl.mc.forge1_12_2.server.world.level.FLevelServer1_1
 import net.daporkchop.lib.common.function.exception.ERunnable;
 import net.daporkchop.lib.common.math.BinMath;
 import net.daporkchop.lib.math.vector.Vec2i;
+import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.nbt.NBTTagCompound;
 import net.minecraft.world.MinecraftException;
 import net.minecraft.world.WorldServer;
@@ -50,6 +51,7 @@ import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.storage.AnvilChunkLoader;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 
 import static net.daporkchop.fp2.core.FP2Core.*;
@@ -61,13 +63,11 @@ import static net.daporkchop.lib.common.util.PValidation.*;
  * @author DaPorkchop_
  */
 public class VanillaExactFBlockLevelHolder1_12 extends AbstractChunksExactFBlockLevelHolder<Chunk> {
-    private static final int SYNC_TICK_INTERVAL = 4;
-    private static final int MAX_CHUNKS_SYNCED_PER_PASS = 12;
+    private static final int MAX_CHUNKS_SYNCED_PER_PASS = 24;
 
     private final WorldServer mcWorld;
     private final AnvilChunkLoader chunkLoader;
     private final LongSet syncedPopulatedChunks = new LongOpenHashSet();
-    private int syncTickCounter = 0;
 
     public VanillaExactFBlockLevelHolder1_12(@NonNull FLevelServer1_12 level) {
         super(level, 4);
@@ -87,15 +87,32 @@ public class VanillaExactFBlockLevelHolder1_12 extends AbstractChunksExactFBlock
         }
     }
 
+    private static long minChunkDistSq(@NonNull Chunk chunk, @NonNull List<EntityPlayer> players) {
+        if (players.isEmpty()) {
+            return 0L;
+        }
+        long best = Long.MAX_VALUE;
+        for (int i = 0, n = players.size(); i < n; i++) {
+            EntityPlayer player = players.get(i);
+            long dx = (long) chunk.x - (((int) Math.floor(player.posX)) >> 4);
+            long dz = (long) chunk.z - (((int) Math.floor(player.posZ)) >> 4);
+            long distSq = dx * dx + dz * dz;
+            if (distSq < best) {
+                best = distSq;
+            }
+        }
+        return best;
+    }
+
     @FEventHandler
     private void onTickEnd(TickEndEvent event) {
-        if (this.mcWorld.disableLevelSaving || (++this.syncTickCounter % SYNC_TICK_INTERVAL) != 0) {
+        if (this.mcWorld.disableLevelSaving) {
             return;
         }
 
         boolean hasSkyLight = this.mcWorld.provider.hasSkyLight();
         int height = this.mcWorld.provider.getActualHeight();
-        int syncedThisTick = 0;
+        List<Chunk> candidates = null;
 
         for (Chunk chunk : this.mcWorld.getChunkProvider().getLoadedChunks()) {
             if (chunk.isEmpty() || !chunk.isTerrainPopulated()) {
@@ -119,14 +136,36 @@ public class VanillaExactFBlockLevelHolder1_12 extends AbstractChunksExactFBlock
                 continue;
             }
 
+            if (candidates == null) {
+                candidates = new ArrayList<>();
+            }
+            candidates.add(chunk);
+        }
+
+        if (candidates == null) {
+            return;
+        }
+
+        if (candidates.size() > 1) {
+            List<EntityPlayer> players = this.mcWorld.playerEntities;
+            candidates.sort((a, b) -> {
+                int d = Long.compare(minChunkDistSq(a, players), minChunkDistSq(b, players));
+                if (d == 0 && (d = Integer.compare(a.x, b.x)) == 0) {
+                    d = Integer.compare(a.z, b.z);
+                }
+                return d;
+            });
+        }
+
+        int limit = Math.min(candidates.size(), MAX_CHUNKS_SYNCED_PER_PASS);
+        for (int i = 0; i < limit; i++) {
+            Chunk chunk = candidates.get(i);
+            long packedPos = BinMath.packXY(chunk.x, chunk.z);
             try {
                 //AnvilChunkLoader.saveChunk serializes NBT, fires ChunkDataEvent.Save for immediate FP2 sync, and queues async disk I/O
                 this.chunkLoader.saveChunk(this.mcWorld, chunk);
                 synchronized (this.syncedPopulatedChunks) {
                     this.syncedPopulatedChunks.add(packedPos);
-                }
-                if (++syncedThisTick >= MAX_CHUNKS_SYNCED_PER_PASS) {
-                    break;
                 }
             } catch (IOException | MinecraftException e) {
                 fp2().log().warn("Failed to sync newly populated chunk (%d, %d) to FP2", e, chunk.x, chunk.z);

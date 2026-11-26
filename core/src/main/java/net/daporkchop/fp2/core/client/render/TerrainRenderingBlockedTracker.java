@@ -99,6 +99,14 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
     protected static final int SIZE_NONEMPTY = 1;
     protected static final long FLAG_NONEMPTY = 1L << SHIFT_NONEMPTY;
 
+    protected static final int SHIFT_VERIFIED_EMPTY = SHIFT_NONEMPTY + SIZE_NONEMPTY;
+    protected static final int SIZE_VERIFIED_EMPTY = 1;
+    protected static final long FLAG_VERIFIED_EMPTY = 1L << SHIFT_VERIFIED_EMPTY;
+
+    protected static final int SHIFT_EXTERNAL_SEED = SHIFT_VERIFIED_EMPTY + SIZE_VERIFIED_EMPTY;
+    protected static final int SIZE_EXTERNAL_SEED = 1;
+    protected static final long FLAG_EXTERNAL_SEED = 1L << SHIFT_EXTERNAL_SEED;
+
     //visibilityFlags()
 
     protected static boolean isVisible(long flags, int inFace, int outFace, int chunkX, int chunkY, int chunkZ, int minChunkX, int maxChunkX, int minChunkY, int maxChunkY, int minChunkZ, int maxChunkZ) {
@@ -109,8 +117,13 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
             return false;
         }
 
-        return inFace < -100 //if inFace is invalid (i.e. sourceDirection was null), all directions are visible
-                || (flags & ((1L << SHIFT_VISIBILITY) << (outFace * FACE_COUNT + inFace))) != 0L;
+        if (inFace < 0) {
+            //if inFace is invalid (sourceDirection was null): camera's own chunk sees all directions,
+            //  whereas an externally seeded top/bottom sheet chunk (e.g. OptiFine ChunkVisibility when playerY > maxChunkY)
+            //  can only be traversed to outFace if some other face of the chunk can see outFace.
+            return (flags & FLAG_EXTERNAL_SEED) == 0L || anyOtherFaceVisibleTo(flags, outFace);
+        }
+        return (flags & ((1L << SHIFT_VISIBILITY) << (outFace * FACE_COUNT + inFace))) != 0L;
     }
 
     //renderDirectionFlags()
@@ -130,6 +143,10 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
     }
 
     protected static boolean isNeighborRenderedOrSafe(long neighborFlags) {
+        if ((neighborFlags & FLAG_VERIFIED_EMPTY) != 0L) {
+            return true;
+        }
+
         //if the neighboring RenderChunk is renderable but neither baked nor selected, it means that the tile would be a valid neighbor except it hasn't yet been baked
         //  because it's never passed the frustum check. skip these to avoid fp2 terrain drawing over vanilla along the edges of the screen when first loading a world.
         if ((neighborFlags & (FLAG_BAKED | FLAG_RENDERABLE | FLAG_SELECTED | FLAG_VANILLA_SELECTED | FLAG_INFRUSTUM)) == FLAG_RENDERABLE) {
@@ -147,6 +164,27 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
             return false;
         }
 
+        return true;
+    }
+
+    protected static boolean isOccludedNegativeNeighborSafe(long neighborFlags) {
+        if ((neighborFlags & FLAG_VERIFIED_EMPTY) != 0L) {
+            return true;
+        }
+        if ((neighborFlags & (FLAG_BAKED | FLAG_RENDERABLE | FLAG_SELECTED | FLAG_VANILLA_SELECTED | FLAG_INFRUSTUM)) == FLAG_RENDERABLE) {
+            return true;
+        }
+        // Must be compiled; if compiled and merely occluded (not visited from camera's entered face), it cannot cause a visible boundary hole.
+        if ((neighborFlags & FLAG_BAKED) == 0L) {
+            return false;
+        }
+        if ((neighborFlags & FLAG_RENDERABLE) == 0L) {
+            return true;
+        }
+        if ((neighborFlags & (FLAG_NONEMPTY | FLAG_INFRUSTUM)) == (FLAG_NONEMPTY | FLAG_INFRUSTUM)
+                && (neighborFlags & (FLAG_VANILLA_SELECTED | FLAG_SELECTED)) == 0L) {
+            return false;
+        }
         return true;
     }
 
@@ -182,7 +220,10 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
     public void close() {
         try (val ignored0 = this.alloc;
              val ignored1 = this.glBuffer) {
-            this.alloc.free(this.addr);
+            if (this.addr != 0L) {
+                this.alloc.free(this.addr);
+                this.addr = 0L;
+            }
         }
     }
 
@@ -220,6 +261,10 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
                                            int offsetChunkX, int offsetChunkY, int offsetChunkZ) {
         long sizeBytes = allocationSizeBytes(factorChunkX, factorChunkY, factorChunkZ);
         if (sizeBytes != this.sizeBytes) {
+            if (this.addr != 0L) {
+                this.alloc.free(this.addr);
+                this.addr = 0L;
+            }
             this.addr = this.alloc.alloc(sizeBytes);
             this.sizeBytes = sizeBytes;
         }
@@ -278,6 +323,7 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
                     //if a RenderChunk is baked, renderable and selected, it's a possible candidate for blocking fp2 terrain
                     if ((centerFlags & (FLAG_BAKED | FLAG_RENDERABLE | FLAG_SELECTED)) == (FLAG_BAKED | FLAG_RENDERABLE | FLAG_SELECTED)) {
                         int inFace = getInFace(centerFlags);
+                        int enteredFace = inFace < 0 ? -1 : getOppositeFace(inFace);
 
                         out = true;
 
@@ -292,25 +338,19 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
                                 continue;
                             }
 
+                            boolean normalVisible = !hasRenderDirection(centerFlags, getOppositeFace(outFace))
+                                    && isVisible(centerFlags, enteredFace, outFace, x - offsetChunkX, y - offsetChunkY, z - offsetChunkZ, minChunkX, maxChunkX, minChunkY, maxChunkY, minChunkZ, maxChunkZ);
                             //negative faces (DOWN, NORTH, WEST) share boundary faces owned by FP2 tile (x, y, z) on the neighbor's outer wall:
-                            //  check if the neighbor is actually rendered whenever any face in center can see out through outFace
+                            //  check if the neighbor is at least safely compiled (not unbaked/void) whenever any face in center can see out through outFace
                             boolean negativeOwnerFace = (outFace & 1) == 0;
                             boolean mustCheck = negativeOwnerFace && anyOtherFaceVisibleTo(centerFlags, outFace);
 
-                            if (!mustCheck) {
-                                //this direction is the opposite of one of the directions that was traversed to get to this RenderChunk, skip it
-                                if (hasRenderDirection(centerFlags, getOppositeFace(outFace))) {
-                                    continue;
-                                }
-
-                                //the neighboring RenderChunk isn't visible from the direction that the current RenderChunk was entered from, skip it
-                                if (!isVisible(centerFlags, getOppositeFace(inFace), outFace, x - offsetChunkX, y - offsetChunkY, z - offsetChunkZ, minChunkX, maxChunkX, minChunkY, maxChunkY, minChunkZ, maxChunkZ)) {
-                                    continue;
-                                }
+                            if (!normalVisible && !mustCheck) {
+                                continue;
                             }
 
                             long neighborFlags = srcFlags[idx + faceIndexOffsets[outFace]];
-                            if (!isNeighborRenderedOrSafe(neighborFlags)) {
+                            if (!(normalVisible ? isNeighborRenderedOrSafe(neighborFlags) : isOccludedNegativeNeighborSafe(neighborFlags))) {
                                 out = false;
                                 break;
                             }

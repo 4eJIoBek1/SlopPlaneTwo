@@ -38,8 +38,10 @@ public interface PriorityTask {
     static Comparator<PriorityTask> approxComparator() {
         return (a, b) -> {
             int d;
-            if ((d = a.stage().compareTo(b.stage())) == 0) {
-                d = Integer.compare(a.pos().level(), b.pos().level());
+            if ((d = Integer.compare(a.pos().level(), b.pos().level())) == 0) {
+                // Prioritize UPDATE over LOAD at the same detail level so nearby exact/stitch/scale
+                // updates are never starved by queued rough LOAD tasks.
+                d = b.stage().compareTo(a.stage());
             }
             return d;
         };
