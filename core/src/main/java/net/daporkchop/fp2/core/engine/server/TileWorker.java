@@ -187,11 +187,12 @@ public class TileWorker implements SharedFutureScheduler.WorkFunction<PriorityTa
                     Arrays.asList(tiles));
 
             //if a game tick completed while rough generation was running on an uninitialized tile and vanilla terrain now exists
-            //  at any generated position, multiMarkDirty during that tick would have skipped the uninitialized handle.
+            //  at or adjacent to any generated level-0 position (which requires re-stitching at level 0), multiMarkDirty during that
+            //  tick would have skipped the uninitialized handle.
             long latestTimestamp = this.provider.currentTimestamp();
             if (state.stage() == TaskStage.LOAD && latestTimestamp > state.worldTimestamp()) {
                 List<TilePos> nowHaveVanilla = state.positions().stream()
-                        .filter(this.provider::anyVanillaTerrainExistsAt)
+                        .filter(this.provider::anyVanillaTerrainExistsNear)
                         .collect(Collectors.toList());
                 if (!nowHaveVanilla.isEmpty()) {
                     this.provider.storage().multiMarkDirty(nowHaveVanilla, latestTimestamp);

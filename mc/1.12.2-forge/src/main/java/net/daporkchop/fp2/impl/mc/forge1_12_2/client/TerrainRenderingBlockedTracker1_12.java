@@ -135,6 +135,7 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
         int playerChunkZ = renderPosZ >> 4;
         int renderDist = net.minecraft.client.Minecraft.getMinecraft().gameSettings.renderDistanceChunks;
         int maxSafeDistSq = Math.max(0, renderDist - 1) * Math.max(0, renderDist - 1);
+        int maxRenderDistSq = renderDist * renderDist;
         net.minecraft.entity.Entity viewEntity = net.minecraft.client.Minecraft.getMinecraft().getRenderViewEntity();
         int camChunkX = viewEntity != null ? floorI(viewEntity.posX) >> 4 : floorI(((ATRenderGlobal1_12) renderGlobal).getFrustumUpdatePosX()) >> 4;
         int camChunkY = viewEntity != null ? floorI(viewEntity.posY + viewEntity.getEyeHeight()) >> 4 : floorI(((ATRenderGlobal1_12) renderGlobal).getFrustumUpdatePosY()) >> 4;
@@ -164,7 +165,7 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
 
             int dx = chunkX - playerChunkX;
             int dz = chunkZ - playerChunkZ;
-            if (dx * dx + dz * dz > maxSafeDistSq) {
+            if (dx * dx + dz * dz > maxRenderDistSq) {
                 // outer edge of render distance: conservative, don't mark as blocked to prevent gaps,
                 //   but mark FLAG_VANILLA_SELECTED so inner neighbors know vanilla is rendering this chunk
                 srcFlags[index] |= FLAG_VANILLA_SELECTED;
@@ -217,7 +218,13 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
             int gy = chunkY + offsetChunkY;
             int gz = chunkZ + offsetChunkZ;
             if (gx >= 0 && gx < factorChunkX && gy >= 0 && gy < factorChunkY && gz >= 0 && gz < factorChunkZ) { //(see above)
-                if (!cubic && (compiledChunk == CompiledChunk.DUMMY || compiledChunk.isEmpty())) {
+                int dx = chunkX - playerChunkX;
+                int dz = chunkZ - playerChunkZ;
+                boolean inSafeDist = dx * dx + dz * dz <= maxSafeDistSq;
+                if (inSafeDist) {
+                    flags |= FLAG_IN_SAFE_DIST;
+                }
+                if (!cubic && inSafeDist && (compiledChunk == CompiledChunk.DUMMY || compiledChunk.isEmpty())) {
                     int colIdx = gx * factorChunkZ + gz;
                     if (!columnChecked[colIdx]) {
                         columnChecked[colIdx] = true;
@@ -231,7 +238,14 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
                         }
                     }
                 }
-                srcFlags[(gx * factorChunkY + gy) * factorChunkZ + gz] |= flags;
+                int gridIdx = (gx * factorChunkY + gy) * factorChunkZ + gz;
+                if (!cubic && inSafeDist
+                        && (flags & (FLAG_BAKED | FLAG_RENDERABLE | FLAG_INFRUSTUM | FLAG_VERIFIED_EMPTY)) == (FLAG_BAKED | FLAG_RENDERABLE | FLAG_INFRUSTUM | FLAG_VERIFIED_EMPTY)
+                        && (flags & FLAG_NONEMPTY) == 0L
+                        && (srcFlags[gridIdx] & FLAG_SELECTED) == 0L) {
+                    flags |= FLAG_SELECTED | FLAG_VANILLA_SELECTED | FLAG_EXTERNAL_SEED;
+                }
+                srcFlags[gridIdx] |= flags;
             }
         });
 

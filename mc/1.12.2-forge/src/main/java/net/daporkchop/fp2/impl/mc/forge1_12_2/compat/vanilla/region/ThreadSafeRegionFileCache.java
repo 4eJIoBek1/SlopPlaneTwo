@@ -213,8 +213,8 @@ public class ThreadSafeRegionFileCache {
                 .flatMap((IOFunction<Matcher, Stream<ChunkPos>>) matcher -> {
                     RegionFile region = this.getRegion(regionDir.resolve(matcher.group()), true);
                     try {
-                        int baseX = Integer.parseInt(matcher.group(1)) << 4;
-                        int baseZ = Integer.parseInt(matcher.group(2)) << 4;
+                        int baseX = Integer.parseInt(matcher.group(1)) << 5;
+                        int baseZ = Integer.parseInt(matcher.group(2)) << 5;
 
                         List<ChunkPos> positions = new ArrayList<>();
                         for (int dx = 0; dx < 32; dx++) {

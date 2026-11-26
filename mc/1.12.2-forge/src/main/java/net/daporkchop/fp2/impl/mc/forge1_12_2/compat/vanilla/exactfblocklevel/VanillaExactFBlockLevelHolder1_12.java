@@ -19,8 +19,8 @@
 
 package net.daporkchop.fp2.impl.mc.forge1_12_2.compat.vanilla.exactfblocklevel;
 
-import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
-import it.unimi.dsi.fastutil.longs.LongSet;
+import it.unimi.dsi.fastutil.longs.Long2ByteMap;
+import it.unimi.dsi.fastutil.longs.Long2ByteOpenHashMap;
 import lombok.Getter;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
@@ -45,10 +45,12 @@ import net.daporkchop.lib.common.math.BinMath;
 import net.daporkchop.lib.math.vector.Vec2i;
 import net.minecraft.entity.player.EntityPlayer;
 import net.minecraft.nbt.NBTTagCompound;
+import net.minecraft.util.math.ChunkPos;
 import net.minecraft.world.MinecraftException;
 import net.minecraft.world.WorldServer;
 import net.minecraft.world.chunk.Chunk;
 import net.minecraft.world.chunk.storage.AnvilChunkLoader;
+import net.minecraft.world.gen.ChunkProviderServer;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -67,12 +69,31 @@ public class VanillaExactFBlockLevelHolder1_12 extends AbstractChunksExactFBlock
 
     private final WorldServer mcWorld;
     private final AnvilChunkLoader chunkLoader;
-    private final LongSet syncedPopulatedChunks = new LongOpenHashSet();
+    private final Long2ByteMap syncedPopulatedMask = new Long2ByteOpenHashMap();
 
     public VanillaExactFBlockLevelHolder1_12(@NonNull FLevelServer1_12 level) {
         super(level, 4);
         this.mcWorld = (WorldServer) level.implLevel();
         this.chunkLoader = (AnvilChunkLoader) this.mcWorld.getChunkProvider().chunkLoader;
+    }
+
+    private static boolean isLoadedPopulated(@NonNull ChunkProviderServer provider, int cx, int cz) {
+        Chunk c = provider.loadedChunks.get(ChunkPos.asLong(cx, cz));
+        return c != null && !c.isEmpty() && c.isTerrainPopulated();
+    }
+
+    private static byte computePopulatedMask(@NonNull ChunkProviderServer provider, int cx, int cz) {
+        int mask = 1;
+        if (isLoadedPopulated(provider, cx - 1, cz)) {
+            mask |= 2;
+        }
+        if (isLoadedPopulated(provider, cx, cz - 1)) {
+            mask |= 4;
+        }
+        if (isLoadedPopulated(provider, cx - 1, cz - 1)) {
+            mask |= 8;
+        }
+        return (byte) mask;
     }
 
     @Override
@@ -81,8 +102,8 @@ public class VanillaExactFBlockLevelHolder1_12 extends AbstractChunksExactFBlock
 
         if (event.column().isFullyPopulated()) {
             long packedPos = BinMath.packXY(event.pos().x(), event.pos().y());
-            synchronized (this.syncedPopulatedChunks) {
-                this.syncedPopulatedChunks.add(packedPos);
+            synchronized (this.syncedPopulatedMask) {
+                this.syncedPopulatedMask.put(packedPos, (byte) (this.syncedPopulatedMask.get(packedPos) | 1));
             }
         }
     }
@@ -112,9 +133,10 @@ public class VanillaExactFBlockLevelHolder1_12 extends AbstractChunksExactFBlock
 
         boolean hasSkyLight = this.mcWorld.provider.hasSkyLight();
         int height = this.mcWorld.provider.getActualHeight();
+        ChunkProviderServer chunkProvider = this.mcWorld.getChunkProvider();
         List<Chunk> candidates = null;
 
-        for (Chunk chunk : this.mcWorld.getChunkProvider().getLoadedChunks()) {
+        for (Chunk chunk : chunkProvider.getLoadedChunks()) {
             if (chunk.isEmpty() || !chunk.isTerrainPopulated()) {
                 continue;
             }
@@ -122,16 +144,18 @@ public class VanillaExactFBlockLevelHolder1_12 extends AbstractChunksExactFBlock
                 continue;
             }
 
+            byte popMask = computePopulatedMask(chunkProvider, chunk.x, chunk.z);
             long packedPos = BinMath.packXY(chunk.x, chunk.z);
-            synchronized (this.syncedPopulatedChunks) {
-                if (this.syncedPopulatedChunks.contains(packedPos)) {
+            synchronized (this.syncedPopulatedMask) {
+                byte prevMask = this.syncedPopulatedMask.get(packedPos);
+                if ((popMask & ~prevMask) == 0) {
                     continue;
                 }
             }
 
             if (!chunk.needsSaving(false) && this.chunksExistIndex().contains(chunk.x, chunk.z)) {
-                synchronized (this.syncedPopulatedChunks) {
-                    this.syncedPopulatedChunks.add(packedPos);
+                synchronized (this.syncedPopulatedMask) {
+                    this.syncedPopulatedMask.put(packedPos, (byte) (this.syncedPopulatedMask.get(packedPos) | popMask));
                 }
                 continue;
             }
@@ -161,11 +185,12 @@ public class VanillaExactFBlockLevelHolder1_12 extends AbstractChunksExactFBlock
         for (int i = 0; i < limit; i++) {
             Chunk chunk = candidates.get(i);
             long packedPos = BinMath.packXY(chunk.x, chunk.z);
+            byte popMask = computePopulatedMask(chunkProvider, chunk.x, chunk.z);
             try {
                 //AnvilChunkLoader.saveChunk serializes NBT, fires ChunkDataEvent.Save for immediate FP2 sync, and queues async disk I/O
                 this.chunkLoader.saveChunk(this.mcWorld, chunk);
-                synchronized (this.syncedPopulatedChunks) {
-                    this.syncedPopulatedChunks.add(packedPos);
+                synchronized (this.syncedPopulatedMask) {
+                    this.syncedPopulatedMask.put(packedPos, (byte) (this.syncedPopulatedMask.get(packedPos) | popMask));
                 }
             } catch (IOException | MinecraftException e) {
                 fp2().log().warn("Failed to sync newly populated chunk (%d, %d) to FP2", e, chunk.x, chunk.z);

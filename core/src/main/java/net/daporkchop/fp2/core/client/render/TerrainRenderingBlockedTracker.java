@@ -107,6 +107,10 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
     protected static final int SIZE_EXTERNAL_SEED = 1;
     protected static final long FLAG_EXTERNAL_SEED = 1L << SHIFT_EXTERNAL_SEED;
 
+    protected static final int SHIFT_IN_SAFE_DIST = SHIFT_EXTERNAL_SEED + SIZE_EXTERNAL_SEED;
+    protected static final int SIZE_IN_SAFE_DIST = 1;
+    protected static final long FLAG_IN_SAFE_DIST = 1L << SHIFT_IN_SAFE_DIST;
+
     //visibilityFlags()
 
     protected static boolean isVisible(long flags, int inFace, int outFace, int chunkX, int chunkY, int chunkZ, int minChunkX, int maxChunkX, int minChunkY, int maxChunkY, int minChunkZ, int maxChunkZ) {
@@ -142,8 +146,12 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
         return (flags & ((((1L << FACE_COUNT) - 1L) & ~(1L << outFace)) << (SHIFT_VISIBILITY + outFace * FACE_COUNT))) != 0L;
     }
 
-    protected static boolean isNeighborRenderedOrSafe(long neighborFlags) {
-        if ((neighborFlags & FLAG_VERIFIED_EMPTY) != 0L) {
+    protected static boolean isNeighborRenderedOrSafe(long neighborFlags, int outFace) {
+        //OptiFine's ChunkVisibility skips sections strictly above a single global maxChunkY, so a skipped
+        //  verified-empty neighbor can only legitimately occur on outFace == UP (1) inside vanilla's safe distance.
+        //  Never trust FLAG_VERIFIED_EMPTY on horizontal or downward faces because FP2 tile (x, y, z) still owns
+        //  the top surface of y-1 blocks (e.g. Y=63 ground in chunkY=4).
+        if (outFace == 1 && (neighborFlags & (FLAG_VERIFIED_EMPTY | FLAG_IN_SAFE_DIST)) == (FLAG_VERIFIED_EMPTY | FLAG_IN_SAFE_DIST)) {
             return true;
         }
 
@@ -167,25 +175,15 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
         return true;
     }
 
-    protected static boolean isOccludedNegativeNeighborSafe(long neighborFlags) {
-        if ((neighborFlags & FLAG_VERIFIED_EMPTY) != 0L) {
+    protected static boolean isOccludedNegativeNeighborSafe(long neighborFlags, int outFace) {
+        //Only treat an unvisited (FLAG_RENDERABLE == 0) negative neighbor as safely occluded when it is strictly
+        //  inside vanilla's interior safe render distance (FLAG_IN_SAFE_DIST) and compiled (FLAG_BAKED).
+        //  Rim or outside-vanilla neighbors with stale FLAG_BAKED from earlier frames must still pass the strict
+        //  rendered check so center never hides its negative-owner boundary faces against an unrendered neighbor.
+        if ((neighborFlags & (FLAG_IN_SAFE_DIST | FLAG_BAKED | FLAG_RENDERABLE)) == (FLAG_IN_SAFE_DIST | FLAG_BAKED)) {
             return true;
         }
-        if ((neighborFlags & (FLAG_BAKED | FLAG_RENDERABLE | FLAG_SELECTED | FLAG_VANILLA_SELECTED | FLAG_INFRUSTUM)) == FLAG_RENDERABLE) {
-            return true;
-        }
-        // Must be compiled; if compiled and merely occluded (not visited from camera's entered face), it cannot cause a visible boundary hole.
-        if ((neighborFlags & FLAG_BAKED) == 0L) {
-            return false;
-        }
-        if ((neighborFlags & FLAG_RENDERABLE) == 0L) {
-            return true;
-        }
-        if ((neighborFlags & (FLAG_NONEMPTY | FLAG_INFRUSTUM)) == (FLAG_NONEMPTY | FLAG_INFRUSTUM)
-                && (neighborFlags & (FLAG_VANILLA_SELECTED | FLAG_SELECTED)) == 0L) {
-            return false;
-        }
-        return true;
+        return isNeighborRenderedOrSafe(neighborFlags, outFace);
     }
 
     protected static int getOppositeFace(int face) {
@@ -350,7 +348,7 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
                             }
 
                             long neighborFlags = srcFlags[idx + faceIndexOffsets[outFace]];
-                            if (!(normalVisible ? isNeighborRenderedOrSafe(neighborFlags) : isOccludedNegativeNeighborSafe(neighborFlags))) {
+                            if (!(normalVisible ? isNeighborRenderedOrSafe(neighborFlags, outFace) : isOccludedNegativeNeighborSafe(neighborFlags, outFace))) {
                                 out = false;
                                 break;
                             }

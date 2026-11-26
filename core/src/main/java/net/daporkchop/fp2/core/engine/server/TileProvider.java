@@ -180,6 +180,21 @@ public abstract class TileProvider implements IFarTileProvider {
         }
     }
 
+    protected boolean anyVanillaTerrainExistsNear(@NonNull TilePos pos) {
+        if (pos.level() != 0) {
+            return this.anyVanillaTerrainExistsAt(pos);
+        }
+        int x = pos.minBlockX();
+        int y = pos.minBlockY();
+        int z = pos.minBlockZ();
+        int sideLength = pos.sideLength();
+        try (FBlockLevel world = this.world().exactBlockLevelHolder().worldFor(ExactFBlockLevelHolder.AllowGenerationRequirement.DONT_CARE)) {
+            return world.containsAnyData(
+                    x - sideLength, y - sideLength, z - sideLength,
+                    x + (sideLength << 1), y + (sideLength << 1), z + (sideLength << 1));
+        }
+    }
+
     //TODO: make this package-private once it gets merged with VoxelTileProvider
     public boolean anyVanillaTerrainExistsAt(@NonNull List<TilePos> positions) {
         return positions.stream().anyMatch(this::anyVanillaTerrainExistsAt);
