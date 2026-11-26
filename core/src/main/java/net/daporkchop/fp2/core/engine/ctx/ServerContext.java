@@ -256,55 +256,19 @@ public class ServerContext implements IFarServerContext {
             return Collections.emptyList();
         }
 
-        Set<TilePos> blocked = DirectTilePosAccess.newPositionHashSet();
-        ArrayDeque<TilePos> queue = new ArrayDeque<>();
-
-        for (Map.Entry<TilePos, PendingUpdate> entry : pendingL0.entrySet()) {
-            TilePos pos = entry.getKey();
-            PendingUpdate pu = entry.getValue();
-            if (currentTick - pu.firstQueuedTick >= MAX_L0_HOLD_TICKS) {
-                continue;
-            }
-            if (pu.snapshot.timestamp() >= currentTick
-                    || isUpdatePending.test(pos)
-                    || hasPending26Neighbor(pos, isUpdatePending)) {
-                blocked.add(pos);
-                queue.add(pos);
-            }
-        }
-
-        while (!queue.isEmpty()) {
-            TilePos cur = queue.poll();
-            int cx = cur.x();
-            int cy = cur.y();
-            int cz = cur.z();
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                    for (int dz = -1; dz <= 1; dz++) {
-                        if (dx == 0 && dy == 0 && dz == 0) {
-                            continue;
-                        }
-                        TilePos n = new TilePos(0, cx + dx, cy + dy, cz + dz);
-                        PendingUpdate npu = pendingL0.get(n);
-                        if (npu != null && currentTick - npu.firstQueuedTick < MAX_L0_HOLD_TICKS && blocked.add(n)) {
-                            queue.add(n);
-                        }
-                    }
-                }
-            }
-        }
-
         Set<TilePos> visited = DirectTilePosAccess.newPositionHashSet();
-        List<List<TileSnapshot>> components = new ArrayList<>();
+        ArrayDeque<TilePos> queue = new ArrayDeque<>();
+        List<List<TileSnapshot>> readyComponents = new ArrayList<>();
+
         for (TilePos root : pendingL0.keySet()) {
-            if (blocked.contains(root) || !visited.add(root)) {
+            if (!visited.add(root)) {
                 continue;
             }
-            List<TileSnapshot> comp = new ArrayList<>();
+            List<TilePos> compPos = new ArrayList<>();
             queue.add(root);
             while (!queue.isEmpty()) {
                 TilePos cur = queue.poll();
-                comp.add(pendingL0.get(cur).snapshot);
+                compPos.add(cur);
                 int cx = cur.x();
                 int cy = cur.y();
                 int cz = cur.z();
@@ -315,17 +279,39 @@ public class ServerContext implements IFarServerContext {
                                 continue;
                             }
                             TilePos n = new TilePos(0, cx + dx, cy + dy, cz + dz);
-                            if (pendingL0.containsKey(n) && !blocked.contains(n) && visited.add(n)) {
+                            if (pendingL0.containsKey(n) && visited.add(n)) {
                                 queue.add(n);
                             }
                         }
                     }
                 }
             }
-            components.add(comp);
+
+            long minFirstQueuedTick = Long.MAX_VALUE;
+            boolean blocked = false;
+            for (int i = 0, ni = compPos.size(); i < ni; i++) {
+                TilePos pos = compPos.get(i);
+                PendingUpdate pu = pendingL0.get(pos);
+                if (pu.firstQueuedTick < minFirstQueuedTick) {
+                    minFirstQueuedTick = pu.firstQueuedTick;
+                }
+                if (!blocked && (pu.snapshot.timestamp() >= currentTick
+                        || isUpdatePending.test(pos)
+                        || hasPending26Neighbor(pos, isUpdatePending))) {
+                    blocked = true;
+                }
+            }
+
+            if (!blocked || (currentTick - minFirstQueuedTick) >= MAX_L0_HOLD_TICKS) {
+                List<TileSnapshot> snaps = new ArrayList<>(compPos.size());
+                for (int i = 0, ni = compPos.size(); i < ni; i++) {
+                    snaps.add(pendingL0.get(compPos.get(i)).snapshot);
+                }
+                readyComponents.add(snaps);
+            }
         }
 
-        return components;
+        return readyComponents;
     }
 
     private synchronized int trySendPendingUpdates() {

@@ -148,10 +148,11 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
 
     protected static boolean isNeighborRenderedOrSafe(long neighborFlags, int outFace) {
         //OptiFine's ChunkVisibility skips sections strictly above a single global maxChunkY, so a skipped
-        //  verified-empty neighbor can only legitimately occur on outFace == UP (1) inside vanilla's safe distance.
+        //  verified-empty neighbor can legitimately occur on outFace == UP (1) anywhere within vanilla's render
+        //  distance (FLAG_VERIFIED_EMPTY is only set for sections verified empty against the loaded client Chunk).
         //  Never trust FLAG_VERIFIED_EMPTY on horizontal or downward faces because FP2 tile (x, y, z) still owns
         //  the top surface of y-1 blocks (e.g. Y=63 ground in chunkY=4).
-        if (outFace == 1 && (neighborFlags & (FLAG_VERIFIED_EMPTY | FLAG_IN_SAFE_DIST)) == (FLAG_VERIFIED_EMPTY | FLAG_IN_SAFE_DIST)) {
+        if (outFace == 1 && (neighborFlags & FLAG_VERIFIED_EMPTY) != 0L) {
             return true;
         }
 

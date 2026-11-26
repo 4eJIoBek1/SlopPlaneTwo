@@ -220,11 +220,13 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
             if (gx >= 0 && gx < factorChunkX && gy >= 0 && gy < factorChunkY && gz >= 0 && gz < factorChunkZ) { //(see above)
                 int dx = chunkX - playerChunkX;
                 int dz = chunkZ - playerChunkZ;
-                boolean inSafeDist = dx * dx + dz * dz <= maxSafeDistSq;
+                int distSq = dx * dx + dz * dz;
+                boolean inSafeDist = distSq <= maxSafeDistSq;
+                boolean inRenderDist = distSq <= maxRenderDistSq;
                 if (inSafeDist) {
                     flags |= FLAG_IN_SAFE_DIST;
                 }
-                if (!cubic && inSafeDist && (compiledChunk == CompiledChunk.DUMMY || compiledChunk.isEmpty())) {
+                if (!cubic && inRenderDist && (compiledChunk == CompiledChunk.DUMMY || compiledChunk.isEmpty())) {
                     int colIdx = gx * factorChunkZ + gz;
                     if (!columnChecked[colIdx]) {
                         columnChecked[colIdx] = true;
@@ -239,7 +241,7 @@ public class TerrainRenderingBlockedTracker1_12 extends TerrainRenderingBlockedT
                     }
                 }
                 int gridIdx = (gx * factorChunkY + gy) * factorChunkZ + gz;
-                if (!cubic && inSafeDist
+                if (!cubic && inRenderDist
                         && (flags & (FLAG_BAKED | FLAG_RENDERABLE | FLAG_INFRUSTUM | FLAG_VERIFIED_EMPTY)) == (FLAG_BAKED | FLAG_RENDERABLE | FLAG_INFRUSTUM | FLAG_VERIFIED_EMPTY)
                         && (flags & FLAG_NONEMPTY) == 0L
                         && (srcFlags[gridIdx] & FLAG_SELECTED) == 0L) {

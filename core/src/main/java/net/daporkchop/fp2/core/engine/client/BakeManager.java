@@ -45,11 +45,14 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.function.Consumer;
 
@@ -60,7 +63,7 @@ import static net.daporkchop.lib.common.util.PValidation.*;
  * @author DaPorkchop_
  */
 public final class BakeManager<VertexType extends AttributeStruct> extends AbstractReleasable implements FarTileCache.Listener, Consumer<TilePos> {
-    static final int MAX_L0_DEFER_FRAMES = 6;
+    static final int MAX_L0_DEFER_FRAMES = 15;
 
     static final class PendingBake<VertexType extends AttributeStruct> implements AutoCloseable {
         final BakeOutput<VertexType> output;
@@ -109,9 +112,14 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
 
         this.coordLimits = new TileCoordLimits(renderer.context().level().coordLimits());
 
-        this.bakeScheduler = new NoFutureScheduler<>(this, this.renderer.context().level().workerManager().createChildWorkerGroup()
+        this.bakeScheduler = new NoFutureScheduler<TilePos>(this, this.renderer.context().level().workerManager().createChildWorkerGroup()
                 .threads(fp2().globalConfig().performance().bakeThreads())
-                .threadFactory(PThreadFactories.builder().daemon().minPriority().collapsingId().name("FP2 Rendering Thread #%d").build()));
+                .threadFactory(PThreadFactories.builder().daemon().minPriority().collapsingId().name("FP2 Rendering Thread #%d").build())) {
+            @Override
+            protected BlockingQueue<TilePos> createTaskQueue() {
+                return new PriorityBlockingQueue<>(1024, Comparator.comparingInt(TilePos::level));
+            }
+        };
 
         this.tileCacheListenerHandle = this.tileCache.addListener(this);
         this.tilesChanged(this.tileCache.getAllPositions());
@@ -274,78 +282,12 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
             return Collections.emptyList();
         }
 
-        Set<TilePos> deferred = DirectTilePosAccess.newPositionHashSet();
-        ArrayDeque<TilePos> queue = new ArrayDeque<>();
-
-        if (allowDefer) {
-            for (Map.Entry<TilePos, PendingBake<V>> entry : l0Snap.entrySet()) {
-                TilePos pos = entry.getKey();
-                PendingBake<V> pb = entry.getValue();
-                if (pb.deferFrames >= MAX_L0_DEFER_FRAMES) {
-                    continue;
-                }
-                int curGen = pendingL0BakeGen.getOrDefault(pos, 0);
-                boolean block = curGen > pb.gen;
-                if (!block) {
-                    int px = pos.x();
-                    int py = pos.y();
-                    int pz = pos.z();
-                    NEIGHBOR_CHECK:
-                    for (int dx = -1; dx <= 1; dx++) {
-                        for (int dy = -1; dy <= 1; dy++) {
-                            for (int dz = -1; dz <= 1; dz++) {
-                                if (dx == 0 && dy == 0 && dz == 0) {
-                                    continue;
-                                }
-                                TilePos n = new TilePos(0, px + dx, py + dy, pz + dz);
-                                Integer nGen = pendingL0BakeGen.get(n);
-                                if (nGen != null) {
-                                    PendingBake<V> npb = l0Snap.get(n);
-                                    if (npb == null || npb.gen < nGen) {
-                                        block = true;
-                                        break NEIGHBOR_CHECK;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if (block) {
-                    deferred.add(pos);
-                    queue.add(pos);
-                }
-            }
-
-            while (!queue.isEmpty()) {
-                TilePos cur = queue.poll();
-                int cx = cur.x();
-                int cy = cur.y();
-                int cz = cur.z();
-                for (int dx = -1; dx <= 1; dx++) {
-                    for (int dy = -1; dy <= 1; dy++) {
-                        for (int dz = -1; dz <= 1; dz++) {
-                            if (dx == 0 && dy == 0 && dz == 0) {
-                                continue;
-                            }
-                            TilePos n = new TilePos(0, cx + dx, cy + dy, cz + dz);
-                            PendingBake<V> npb = l0Snap.get(n);
-                            if (npb != null && npb.deferFrames < MAX_L0_DEFER_FRAMES && deferred.add(n)) {
-                                queue.add(n);
-                            }
-                        }
-                    }
-                }
-            }
-
-            for (TilePos pos : deferred) {
-                l0Snap.get(pos).deferFrames++;
-            }
-        }
-
         Set<TilePos> visited = DirectTilePosAccess.newPositionHashSet();
-        List<List<TilePos>> components = new ArrayList<>();
+        ArrayDeque<TilePos> queue = new ArrayDeque<>();
+        List<List<TilePos>> readyComponents = new ArrayList<>();
+
         for (TilePos root : l0Snap.keySet()) {
-            if (deferred.contains(root) || !visited.add(root)) {
+            if (!visited.add(root)) {
                 continue;
             }
             List<TilePos> comp = new ArrayList<>();
@@ -363,17 +305,68 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
                                 continue;
                             }
                             TilePos n = new TilePos(0, cx + dx, cy + dy, cz + dz);
-                            if (l0Snap.containsKey(n) && !deferred.contains(n) && visited.add(n)) {
+                            if (l0Snap.containsKey(n) && visited.add(n)) {
                                 queue.add(n);
                             }
                         }
                     }
                 }
             }
-            components.add(comp);
+
+            if (!allowDefer) {
+                readyComponents.add(comp);
+                continue;
+            }
+
+            int maxDefer = 0;
+            boolean blocked = false;
+            for (int i = 0, ni = comp.size(); i < ni; i++) {
+                TilePos pos = comp.get(i);
+                PendingBake<V> pb = l0Snap.get(pos);
+                if (pb.deferFrames > maxDefer) {
+                    maxDefer = pb.deferFrames;
+                }
+                if (!blocked) {
+                    int curGen = pendingL0BakeGen.getOrDefault(pos, 0);
+                    if (curGen > pb.gen) {
+                        blocked = true;
+                    } else {
+                        int px = pos.x();
+                        int py = pos.y();
+                        int pz = pos.z();
+                        NEIGHBOR_CHECK:
+                        for (int dx = -1; dx <= 1; dx++) {
+                            for (int dy = -1; dy <= 1; dy++) {
+                                for (int dz = -1; dz <= 1; dz++) {
+                                    if (dx == 0 && dy == 0 && dz == 0) {
+                                        continue;
+                                    }
+                                    TilePos n = new TilePos(0, px + dx, py + dy, pz + dz);
+                                    Integer nGen = pendingL0BakeGen.get(n);
+                                    if (nGen != null) {
+                                        PendingBake<V> npb = l0Snap.get(n);
+                                        if (npb == null || npb.gen < nGen) {
+                                            blocked = true;
+                                            break NEIGHBOR_CHECK;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (blocked && maxDefer < MAX_L0_DEFER_FRAMES) {
+                for (int i = 0, ni = comp.size(); i < ni; i++) {
+                    l0Snap.get(comp.get(i)).deferFrames++;
+                }
+            } else {
+                readyComponents.add(comp);
+            }
         }
 
-        return components;
+        return readyComponents;
     }
 
     /**
@@ -390,7 +383,6 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
             final long maximumBufferUploaderCapacity = bufferUploader.maximumCapacity();
             final int maxBakes = fp2().globalConfig().performance().maxBakesProcessedPerFrame();
             final int bakeThreads = fp2().globalConfig().performance().bakeThreads();
-            final boolean allowL0Defer = dataUpdatesCount < Math.max(maxBakes - (bakeThreads << 1), 0);
 
             Map<TilePos, PendingBake<VertexType>> l0Snap = null;
             List<TilePos> coarsePositions = null;
@@ -412,6 +404,10 @@ public final class BakeManager<VertexType extends AttributeStruct> extends Abstr
                     coarsePositions.add(pos);
                 }
             }
+
+            final boolean allowL0Defer = l0Snap != null
+                    && l0Snap.size() < Math.max(maxBakes - (bakeThreads << 1), 0)
+                    && dataUpdatesCount < Math.max(maxBakes - bakeThreads, 0);
 
             List<List<TilePos>> readyL0Components = l0Snap == null
                     ? Collections.emptyList()
