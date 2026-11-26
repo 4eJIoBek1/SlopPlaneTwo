@@ -75,6 +75,13 @@ public interface IFarTileProvider extends Closeable {
      */
     long currentTimestamp();
 
+    /**
+     * @return {@code true} if tile updates have been queued in this tick and not yet flushed to storage/trackers
+     */
+    default boolean hasPendingDirtyUpdates() {
+        return false;
+    }
+
     @Override
     void close();
 

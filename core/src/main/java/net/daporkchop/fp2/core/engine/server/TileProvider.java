@@ -82,6 +82,7 @@ public abstract class TileProvider implements IFarTileProvider {
     protected final Scheduler<PriorityTask, ITileHandle> scheduler; //TODO: make this global rather than per-mode and per-dimension
 
     protected Set<TilePos> updatesPending = new ObjectRBTreeSet<>();
+    protected volatile boolean hasPendingDirtyUpdates = false;
     protected long lastCompletedTick = -1L;
 
     protected boolean open = false;
@@ -220,6 +221,11 @@ public abstract class TileProvider implements IFarTileProvider {
         return this.generatorRough != null && this.generatorRough.canGenerate(pos);
     }
 
+    @Override
+    public boolean hasPendingDirtyUpdates() {
+        return this.hasPendingDirtyUpdates;
+    }
+
     protected void scheduleForUpdate(@NonNull TilePos pos) {
         this.scheduleForUpdate(ImmutableList.of(pos));
     }
@@ -233,6 +239,9 @@ public abstract class TileProvider implements IFarTileProvider {
 
         //noinspection SynchronizeOnNonFinalField
         synchronized (this.updatesPending) {
+            if (!positions.isEmpty()) {
+                this.hasPendingDirtyUpdates = true;
+            }
             this.updatesPending.addAll(positions);
         }
     }
@@ -270,6 +279,7 @@ public abstract class TileProvider implements IFarTileProvider {
             //clear the pending updates queue
             this.updatesPending.clear();
         }
+        this.hasPendingDirtyUpdates = false;
     }
 
     @Synchronized("updatesPending")

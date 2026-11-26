@@ -21,6 +21,7 @@ package net.daporkchop.fp2.impl.mc.forge1_12_2.compat.vanilla.generator.rough;
 
 import lombok.NonNull;
 import net.daporkchop.fp2.api.world.level.BlockLevelConstants;
+import net.daporkchop.fp2.core.engine.DirectTilePosAccess;
 import net.daporkchop.fp2.core.engine.api.server.IFarTileProvider;
 import net.daporkchop.fp2.core.engine.Tile;
 import net.daporkchop.fp2.core.engine.TileData;
@@ -36,6 +37,9 @@ import net.minecraft.world.WorldServer;
 import net.minecraft.world.biome.Biome;
 
 import java.util.Arrays;
+import java.util.Collection;
+import java.util.Optional;
+import java.util.Set;
 
 import static java.lang.Math.*;
 import static net.daporkchop.fp2.api.world.level.BlockLevelConstants.*;
@@ -57,6 +61,26 @@ public class VanillaRoughGenerator1_12 extends AbstractDualContouringRoughVoxelG
         super(world, provider);
 
         this.ctx = Cached.threadLocal(() -> new VanillaRoughContext1_12(this.registry(), (WorldServer) world.implLevel(), CACHE_SIZE), ReferenceStrength.WEAK);
+    }
+
+    @Override
+    public Optional<? extends Collection<TilePos>> batchGenerationGroup(@NonNull TilePos pos) {
+        if (pos.level() != 0) {
+            return Optional.empty();
+        }
+        int minY = this.provider().coordLimits().min(0).y();
+        int maxY = this.provider().coordLimits().max(0).y(); //exclusive
+        if (maxY - minY <= 1) {
+            return Optional.empty();
+        }
+        Set<TilePos> out = DirectTilePosAccess.newPositionHashSet();
+        for (int y = minY; y < maxY; y++) {
+            TilePos p = new TilePos(0, pos.x(), y, pos.z());
+            if (this.provider().coordLimits().contains(p)) {
+                out.add(p);
+            }
+        }
+        return Optional.of(out);
     }
 
     @Override

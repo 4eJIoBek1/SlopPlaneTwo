@@ -213,6 +213,14 @@ public final class TrackerManager implements FTileStorage.Listener, AutoCloseabl
         }.run();
     }
 
+    /**
+     * Checks whether the given tracked tile currently has a server-side {@code UPDATE} task scheduled or in flight.
+     */
+    public boolean isUpdatePending(@NonNull TilePos pos) {
+        Entry entry = this.entries.get(pos);
+        return entry != null && entry.updatePending;
+    }
+
     @CalledFromServerThread
     public void dropAllTiles() {
         Collection<ServerContext> trackedContextsSnapshot = new ArrayList<>(this.trackers.keySet());
@@ -346,6 +354,7 @@ public final class TrackerManager implements FTileStorage.Listener, AutoCloseabl
         protected Set<Tracker> trackersWaitingForLoad; //all tracker instances which are waiting for the load future to be completed, or null if empty
 
         protected long lastSentTimestamp = ITileMetadata.TIMESTAMP_BLANK;
+        protected volatile boolean updatePending;
 
         public Entry(@NonNull TilePos pos) {
             this.pos = pos;
@@ -371,6 +380,7 @@ public final class TrackerManager implements FTileStorage.Listener, AutoCloseabl
                     this.updateFuture.cancel(false);
                     this.updateFuture = null;
                 }
+                this.updatePending = false;
 
                 //this entry should be replaced with null
                 return null;
@@ -468,8 +478,10 @@ public final class TrackerManager implements FTileStorage.Listener, AutoCloseabl
 
             if (t instanceof CancellationException) { //the tile update task was cancelled
                 //TODO: Should we add an assertion here to verify that this entry has no trackers?
+                this.updatePending = false;
                 return;
             } else if (t != null) { //an exception occurred while updating the tile
+                this.updatePending = false;
                 super.forEach(tracker -> {
                     if (!this.isWaitingForLoad(tracker)) {
                         tracker.notifyFailed(this.pos);
@@ -513,9 +525,12 @@ public final class TrackerManager implements FTileStorage.Listener, AutoCloseabl
 
             if (this.updateFuture != null //tile is still being loaded or is already being updated, we shouldn't try to update it again
                 || handle.dirtyTimestamp() == ITileMetadata.TIMESTAMP_BLANK) { //tile isn't dirty, no need to update
+                this.updatePending = this.updateFuture != null;
                 return;
             }
 
+            //set updatePending BEFORE scheduling so concurrent readers never observe a gap before tileUpdated
+            this.updatePending = true;
             //schedule a new update task for this tile
             this.updateFuture = TrackerManager.this.tileProvider.requestUpdate(this.pos);
             this.updateFuture.handle(this);

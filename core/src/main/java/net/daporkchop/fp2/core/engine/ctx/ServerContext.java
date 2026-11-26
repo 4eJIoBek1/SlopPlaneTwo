@@ -36,6 +36,7 @@ import net.daporkchop.fp2.core.server.world.level.IFarLevelServer;
 import net.daporkchop.fp2.core.util.annotation.CalledFromServerThread;
 import net.daporkchop.lib.common.annotation.TransferOwnership;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -44,6 +45,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 import static net.daporkchop.fp2.core.debug.FP2Debug.*;
 import static net.daporkchop.lib.common.util.PValidation.*;
@@ -54,6 +56,18 @@ import static net.daporkchop.lib.common.util.PValidation.*;
 @Getter
 public class ServerContext implements IFarServerContext {
     protected static final long MAX_UPDATE_BATCH_BYTES = 256L * 1024L;
+    protected static final long MAX_CONNECTED_L0_BATCH_BYTES = 1024L * 1024L;
+    protected static final long MAX_L0_HOLD_TICKS = 12L;
+
+    static final class PendingUpdate {
+        TileSnapshot snapshot;
+        final long firstQueuedTick;
+
+        PendingUpdate(@NonNull TileSnapshot snapshot, long firstQueuedTick) {
+            this.snapshot = snapshot;
+            this.firstQueuedTick = firstQueuedTick;
+        }
+    }
 
     protected final IFarPlayerServer player;
     protected final IFarLevelServer world;
@@ -63,7 +77,7 @@ public class ServerContext implements IFarServerContext {
 
     protected Set<TilePos> unloadTilesQueue = DirectTilePosAccess.newPositionHashSet();
     protected final Map<TilePos, TileSnapshot> sendTilesQueue = DirectTilePosAccess.newPositionKeyedLinkedHashMap();
-    protected final Map<TilePos, TileSnapshot> pendingUpdateTiles = DirectTilePosAccess.newPositionKeyedLinkedHashMap();
+    protected final Map<TilePos, PendingUpdate> pendingUpdateTiles = DirectTilePosAccess.newPositionKeyedLinkedHashMap();
 
     protected FP2Config config;
 
@@ -182,7 +196,13 @@ public class ServerContext implements IFarServerContext {
         synchronized (this) {
             this.unloadTilesQueue.remove(snapshot.pos());
             this.sendTilesQueue.remove(snapshot.pos());
-            this.pendingUpdateTiles.put(snapshot.pos(), snapshot);
+            long now = this.world.timestamp();
+            PendingUpdate existing = this.pendingUpdateTiles.get(snapshot.pos());
+            if (existing != null) {
+                existing.snapshot = snapshot;
+            } else {
+                this.pendingUpdateTiles.put(snapshot.pos(), new PendingUpdate(snapshot, now));
+            }
         }
     }
 
@@ -208,27 +228,144 @@ public class ServerContext implements IFarServerContext {
         };
     }
 
+    private static boolean hasPending26Neighbor(@NonNull TilePos pos, @NonNull Predicate<TilePos> pred) {
+        int px = pos.x();
+        int py = pos.y();
+        int pz = pos.z();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (dx == 0 && dy == 0 && dz == 0) {
+                        continue;
+                    }
+                    if (pred.test(new TilePos(0, px + dx, py + dy, pz + dz))) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    static List<List<TileSnapshot>> selectReadyL0Components(
+            @NonNull Map<TilePos, PendingUpdate> pendingL0,
+            long currentTick,
+            boolean deferAllL0,
+            @NonNull Predicate<TilePos> isUpdatePending) {
+        if (pendingL0.isEmpty() || deferAllL0) {
+            return Collections.emptyList();
+        }
+
+        Set<TilePos> blocked = DirectTilePosAccess.newPositionHashSet();
+        ArrayDeque<TilePos> queue = new ArrayDeque<>();
+
+        for (Map.Entry<TilePos, PendingUpdate> entry : pendingL0.entrySet()) {
+            TilePos pos = entry.getKey();
+            PendingUpdate pu = entry.getValue();
+            if (currentTick - pu.firstQueuedTick >= MAX_L0_HOLD_TICKS) {
+                continue;
+            }
+            if (pu.snapshot.timestamp() >= currentTick
+                    || isUpdatePending.test(pos)
+                    || hasPending26Neighbor(pos, isUpdatePending)) {
+                blocked.add(pos);
+                queue.add(pos);
+            }
+        }
+
+        while (!queue.isEmpty()) {
+            TilePos cur = queue.poll();
+            int cx = cur.x();
+            int cy = cur.y();
+            int cz = cur.z();
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dz = -1; dz <= 1; dz++) {
+                        if (dx == 0 && dy == 0 && dz == 0) {
+                            continue;
+                        }
+                        TilePos n = new TilePos(0, cx + dx, cy + dy, cz + dz);
+                        PendingUpdate npu = pendingL0.get(n);
+                        if (npu != null && currentTick - npu.firstQueuedTick < MAX_L0_HOLD_TICKS && blocked.add(n)) {
+                            queue.add(n);
+                        }
+                    }
+                }
+            }
+        }
+
+        Set<TilePos> visited = DirectTilePosAccess.newPositionHashSet();
+        List<List<TileSnapshot>> components = new ArrayList<>();
+        for (TilePos root : pendingL0.keySet()) {
+            if (blocked.contains(root) || !visited.add(root)) {
+                continue;
+            }
+            List<TileSnapshot> comp = new ArrayList<>();
+            queue.add(root);
+            while (!queue.isEmpty()) {
+                TilePos cur = queue.poll();
+                comp.add(pendingL0.get(cur).snapshot);
+                int cx = cur.x();
+                int cy = cur.y();
+                int cz = cur.z();
+                for (int dx = -1; dx <= 1; dx++) {
+                    for (int dy = -1; dy <= 1; dy++) {
+                        for (int dz = -1; dz <= 1; dz++) {
+                            if (dx == 0 && dy == 0 && dz == 0) {
+                                continue;
+                            }
+                            TilePos n = new TilePos(0, cx + dx, cy + dy, cz + dz);
+                            if (pendingL0.containsKey(n) && !blocked.contains(n) && visited.add(n)) {
+                                queue.add(n);
+                            }
+                        }
+                    }
+                }
+            }
+            components.add(comp);
+        }
+
+        return components;
+    }
+
     private synchronized int trySendPendingUpdates() {
         if (this.sendingTiles || this.pendingUpdateTiles.isEmpty()) {
             return 0;
         }
 
         long currentTick = this.world.timestamp();
-        List<TileSnapshot> ready = null;
-        for (TileSnapshot snapshot : this.pendingUpdateTiles.values()) {
-            if (snapshot.timestamp() < currentTick) {
-                if (ready == null) {
-                    ready = new ArrayList<>();
+        Map<TilePos, PendingUpdate> pendingL0 = null;
+        List<TileSnapshot> readyCoarse = null;
+        for (Map.Entry<TilePos, PendingUpdate> entry : this.pendingUpdateTiles.entrySet()) {
+            TilePos pos = entry.getKey();
+            PendingUpdate pu = entry.getValue();
+            if (pos.level() == 0) {
+                if (pendingL0 == null) {
+                    pendingL0 = DirectTilePosAccess.newPositionKeyedLinkedHashMap();
                 }
-                ready.add(snapshot);
+                pendingL0.put(pos, pu);
+            } else if (pu.snapshot.timestamp() < currentTick) {
+                if (readyCoarse == null) {
+                    readyCoarse = new ArrayList<>();
+                }
+                readyCoarse.add(pu.snapshot);
             }
         }
-        if (ready == null) {
+
+        List<List<TileSnapshot>> l0Components = pendingL0 == null
+                ? Collections.emptyList()
+                : selectReadyL0Components(
+                        pendingL0,
+                        currentTick,
+                        this.tileProvider.hasPendingDirtyUpdates(),
+                        this.tileProvider.trackerManager()::isUpdatePending);
+
+        if (l0Components.isEmpty() && readyCoarse == null) {
             return 0;
         }
 
-        if (ready.size() > 1) {
-            ready.sort(Comparator.comparingInt(s -> s.pos().level()));
+        if (readyCoarse != null && readyCoarse.size() > 1) {
+            readyCoarse.sort(Comparator.comparingInt(s -> s.pos().level()));
         }
 
         int sentTiles = 0;
@@ -237,29 +374,84 @@ public class ServerContext implements IFarServerContext {
             List<TileSnapshot> batch = new ArrayList<>();
             long batchBytes = 0L;
 
-            for (int i = 0, n = ready.size(); i < n; i++) {
-                TileSnapshot tile = ready.get(i);
-                long tileBytes = tile.dataSize();
+            L0_LOOP:
+            for (int c = 0, nc = l0Components.size(); c < nc; c++) {
+                List<TileSnapshot> comp = l0Components.get(c);
+                long compBytes = 0L;
+                for (int i = 0, ni = comp.size(); i < ni; i++) {
+                    compBytes += comp.get(i).dataSize();
+                }
 
-                if (!batch.isEmpty() && (batchBytes + tileBytes > MAX_UPDATE_BATCH_BYTES
-                        || !this.player.fp2_IFarPlayer_flowControl().mayWrite(batchBytes + tileBytes))) {
+                if (!batch.isEmpty() && (batchBytes + compBytes > MAX_UPDATE_BATCH_BYTES
+                        || !this.player.fp2_IFarPlayer_flowControl().mayWrite(batchBytes + compBytes))) {
                     this.player.fp2_IFarPlayer_sendPacket(SPacketTileData.create(batch), this.sentHandler());
                     batch = new ArrayList<>();
                     batchBytes = 0L;
                 }
 
-                if (batch.isEmpty() && !this.player.fp2_IFarPlayer_flowControl().mayWrite(tileBytes)) {
-                    break;
+                if (compBytes <= MAX_CONNECTED_L0_BATCH_BYTES) {
+                    if (batch.isEmpty() && !this.player.fp2_IFarPlayer_flowControl().mayWrite(compBytes)) {
+                        break;
+                    }
+                    for (int i = 0, ni = comp.size(); i < ni; i++) {
+                        TileSnapshot tile = comp.get(i);
+                        this.pendingUpdateTiles.remove(tile.pos());
+                        batch.add(tile);
+                    }
+                    batchBytes += compBytes;
+                    sentTiles += comp.size();
+                } else {
+                    for (int i = 0, ni = comp.size(); i < ni; i++) {
+                        TileSnapshot tile = comp.get(i);
+                        long tileBytes = tile.dataSize();
+                        if (!batch.isEmpty() && (batchBytes + tileBytes > MAX_UPDATE_BATCH_BYTES
+                                || !this.player.fp2_IFarPlayer_flowControl().mayWrite(batchBytes + tileBytes))) {
+                            this.player.fp2_IFarPlayer_sendPacket(SPacketTileData.create(batch), this.sentHandler());
+                            batch = new ArrayList<>();
+                            batchBytes = 0L;
+                        }
+                        if (batch.isEmpty() && !this.player.fp2_IFarPlayer_flowControl().mayWrite(tileBytes)) {
+                            break L0_LOOP;
+                        }
+                        this.pendingUpdateTiles.remove(tile.pos());
+                        batch.add(tile);
+                        batchBytes += tileBytes;
+                        sentTiles++;
+                    }
                 }
-
-                this.pendingUpdateTiles.remove(tile.pos());
-                batch.add(tile);
-                batchBytes += tileBytes;
-                sentTiles++;
             }
 
             if (!batch.isEmpty()) {
                 this.player.fp2_IFarPlayer_sendPacket(SPacketTileData.create(batch), this.sentHandler());
+                batch = new ArrayList<>();
+                batchBytes = 0L;
+            }
+
+            if (readyCoarse != null) {
+                for (int i = 0, n = readyCoarse.size(); i < n; i++) {
+                    TileSnapshot tile = readyCoarse.get(i);
+                    long tileBytes = tile.dataSize();
+
+                    if (!batch.isEmpty() && (batchBytes + tileBytes > MAX_UPDATE_BATCH_BYTES
+                            || !this.player.fp2_IFarPlayer_flowControl().mayWrite(batchBytes + tileBytes))) {
+                        this.player.fp2_IFarPlayer_sendPacket(SPacketTileData.create(batch), this.sentHandler());
+                        batch = new ArrayList<>();
+                        batchBytes = 0L;
+                    }
+
+                    if (batch.isEmpty() && !this.player.fp2_IFarPlayer_flowControl().mayWrite(tileBytes)) {
+                        break;
+                    }
+
+                    this.pendingUpdateTiles.remove(tile.pos());
+                    batch.add(tile);
+                    batchBytes += tileBytes;
+                    sentTiles++;
+                }
+
+                if (!batch.isEmpty()) {
+                    this.player.fp2_IFarPlayer_sendPacket(SPacketTileData.create(batch), this.sentHandler());
+                }
             }
 
             return sentTiles;
