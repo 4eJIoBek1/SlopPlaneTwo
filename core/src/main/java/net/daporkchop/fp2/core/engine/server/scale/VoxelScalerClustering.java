@@ -82,7 +82,9 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
 
         final int[] dstEdges = new int[TOTAL_DST_CELLS];
         final int[] dstStates = new int[TOTAL_DST_CELLS * EDGE_COUNT];
-        final int[] dstBiomeAndLight = new int[TOTAL_DST_CELLS];
+        final int[] dstBiome = new int[TOTAL_DST_CELLS];
+        final byte[] dstSkyLight = new byte[TOTAL_DST_CELLS];
+        final byte[] dstBlockLight = new byte[TOTAL_DST_CELLS];
 
         // Vertex placement accumulators from active coarse edge crossings (Surface Nets mass point)
         final int[] vertSumX = new int[TOTAL_DST_CELLS];
@@ -100,7 +102,9 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
             Arrays.fill(this.waterDir, (byte) 0);
             Arrays.fill(this.dstEdges, 0);
             Arrays.fill(this.dstStates, 0);
-            Arrays.fill(this.dstBiomeAndLight, 0);
+            Arrays.fill(this.dstBiome, 0);
+            Arrays.fill(this.dstSkyLight, (byte) 0);
+            Arrays.fill(this.dstBlockLight, (byte) 0);
             Arrays.fill(this.vertSumX, 0);
             Arrays.fill(this.vertSumY, 0);
             Arrays.fill(this.vertSumZ, 0);
@@ -231,9 +235,12 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
 
         // Pass 2: Telescope each coarse edge cleanly (eliminates EDGE_DIR_BOTH plates and cross-planes) and
         // scatter exact crossing positions to corner voxels (eliminates empty-corner (0.5,0.5,0.5) spikes).
+        // Walk each vertical column top-down so skylight freed by a telescoped canopy or thin roof passes
+        // down to the newly exposed upward surface directly beneath it without lighting deeper sealed caves.
         for (int x = DST_MIN; x < EDGE_GRID_MAX; x++) {
-            for (int y = DST_MIN; y < EDGE_GRID_MAX; y++) {
-                for (int z = DST_MIN; z < EDGE_GRID_MAX; z++) {
+            for (int z = DST_MIN; z < EDGE_GRID_MAX; z++) {
+                int cancelledSky = 0;
+                for (int y = EDGE_GRID_MAX - 1; y >= DST_MIN; y--) {
                     int di = dstIndex(x, y, z);
                     int outEdges = 0;
 
@@ -251,6 +258,14 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
                                 sNet = 1;
                             }
                         }
+                        if (edge == 1) {
+                            if (sNet == 0 && ctx.solidDir[slot0] < 0 && ctx.solidDir[slot1] > 0) {
+                                cancelledSky = Math.max(cancelledSky, unpackSkyLight((byte) ctx.solidBiomeLight[slot1]));
+                            }
+                            if (wNet == 0 && ctx.waterDir[slot0] < 0 && ctx.waterDir[slot1] > 0) {
+                                cancelledSky = Math.max(cancelledSky, unpackSkyLight((byte) ctx.waterBiomeLight[slot1]));
+                            }
+                        }
                         if (sNet == 0 && wNet == 0) {
                             continue;
                         }
@@ -263,17 +278,23 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
 
                         if (wNet == 0) {
                             finalDir = sNet > 0 ? EDGE_DIR_POSITIVE : EDGE_DIR_NEGATIVE;
-                            int win = pickSolidSlot(ctx.solidDir, slot0, slot1, sNet);
+                            int win = pickSlot(ctx.solidDir, slot0, slot1, sNet);
                             finalState = ctx.solidState[win];
                             finalT = ctx.solidPos[win];
                             finalBL = ctx.solidBiomeLight[win];
+                            if (ctx.solidDir[slot0] != 0 && ctx.solidDir[slot1] != 0) {
+                                finalBL = mergeMaxLight(finalBL, ctx.solidBiomeLight[win ^ 1]);
+                            }
                             isEdgeWater = false;
                         } else if (sNet == 0) {
                             finalDir = wNet > 0 ? EDGE_DIR_POSITIVE : EDGE_DIR_NEGATIVE;
-                            int win = ctx.waterDir[slot1] != 0 ? slot1 : slot0;
+                            int win = pickSlot(ctx.waterDir, slot0, slot1, wNet);
                             finalState = ctx.waterState[win];
                             finalT = ctx.waterPos[win];
                             finalBL = ctx.waterBiomeLight[win];
+                            if (ctx.waterDir[slot0] != 0 && ctx.waterDir[slot1] != 0) {
+                                finalBL = mergeMaxLight(finalBL, ctx.waterBiomeLight[win ^ 1]);
+                            }
                             isEdgeWater = true;
                         } else {
                             // If both layers crossed: keep water under overhanging foliage/bridges on Y-edges so water stays
@@ -281,26 +302,48 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
                             boolean waterUnderOverhang = (sNet > 0) != (wNet > 0) && edge == 1 && wNet > 0 && sNet < 0;
                             if (waterUnderOverhang) {
                                 finalDir = EDGE_DIR_POSITIVE;
-                                int win = ctx.waterDir[slot1] != 0 ? slot1 : slot0;
+                                int win = pickSlot(ctx.waterDir, slot0, slot1, wNet);
                                 finalState = ctx.waterState[win];
                                 finalT = ctx.waterPos[win];
                                 finalBL = ctx.waterBiomeLight[win];
+                                if (ctx.waterDir[slot0] != 0 && ctx.waterDir[slot1] != 0) {
+                                    finalBL = mergeMaxLight(finalBL, ctx.waterBiomeLight[win ^ 1]);
+                                }
                                 isEdgeWater = true;
                             } else {
                                 finalDir = sNet > 0 ? EDGE_DIR_POSITIVE : EDGE_DIR_NEGATIVE;
-                                int win = pickSolidSlot(ctx.solidDir, slot0, slot1, sNet);
+                                int win = pickSlot(ctx.solidDir, slot0, slot1, sNet);
                                 finalState = ctx.solidState[win];
                                 finalT = ctx.solidPos[win];
                                 finalBL = ctx.solidBiomeLight[win];
+                                if (ctx.solidDir[slot0] != 0 && ctx.solidDir[slot1] != 0) {
+                                    finalBL = mergeMaxLight(finalBL, ctx.solidBiomeLight[win ^ 1]);
+                                }
+                                if ((wNet > 0) == (sNet > 0)) {
+                                    int wWin = pickSlot(ctx.waterDir, slot0, slot1, wNet);
+                                    finalBL = mergeMaxLight(finalBL, ctx.waterBiomeLight[wWin]);
+                                    if (ctx.waterDir[slot0] != 0 && ctx.waterDir[slot1] != 0) {
+                                        finalBL = mergeMaxLight(finalBL, ctx.waterBiomeLight[wWin ^ 1]);
+                                    }
+                                }
                                 isEdgeWater = false;
                             }
+                        }
+
+                        if (edge == 1) {
+                            if (finalDir == EDGE_DIR_POSITIVE && cancelledSky > 0) {
+                                finalBL = boostSkyLight(finalBL, cancelledSky);
+                            }
+                            cancelledSky = 0;
                         }
 
                         outEdges |= (finalDir << (edge << 1));
                         ctx.dstStates[si] = finalState;
 
                         int sky = unpackSkyLight((byte) finalBL);
-                        short rank = (short) ((edge == 1 ? 1024 : 0) + (!isEdgeWater ? 512 : 0) + (sky << 4) + (y + 2));
+                        int blk = unpackBlockLight((byte) finalBL);
+                        int biome = finalBL >>> 8;
+                        short rank = (short) ((edge == 1 ? 1024 : 0) + (sky << 6) + (!isEdgeWater ? 32 : 0) + (y + 2));
 
                         for (int i = 0; i < CONNECTION_INDEX_COUNT; i++) {
                             int c = CONNECTION_INDICES[edge * CONNECTION_INDEX_COUNT + i];
@@ -342,9 +385,15 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
                                 ctx.waterVertYSum[vIdx] += ly;
                                 ctx.waterVertYCount[vIdx]++;
                             }
+                            if (sky > ctx.dstSkyLight[vIdx]) {
+                                ctx.dstSkyLight[vIdx] = (byte) sky;
+                            }
+                            if (blk > ctx.dstBlockLight[vIdx]) {
+                                ctx.dstBlockLight[vIdx] = (byte) blk;
+                            }
                             if (rank > ctx.vertRank[vIdx]) {
                                 ctx.vertRank[vIdx] = rank;
-                                ctx.dstBiomeAndLight[vIdx] = finalBL;
+                                ctx.dstBiome[vIdx] = biome;
                             }
                         }
                     }
@@ -382,9 +431,8 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
                     data.states[1] = ctx.dstStates[di * EDGE_COUNT + 1];
                     data.states[2] = ctx.dstStates[di * EDGE_COUNT + 2];
 
-                    int bl = ctx.dstBiomeAndLight[di];
-                    data.biome = bl >>> 8;
-                    data.light = (byte) bl;
+                    data.biome = ctx.dstBiome[di];
+                    data.light = packLight(ctx.dstSkyLight[di], ctx.dstBlockLight[di]);
 
                     dst.set(x, y, z, data);
                 }
@@ -419,9 +467,9 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
         }
     }
 
-    private static int pickSolidSlot(byte[] solidDir, int slot0, int slot1, int net) {
-        int d0 = solidDir[slot0];
-        int d1 = solidDir[slot1];
+    private static int pickSlot(byte[] dir, int slot0, int slot1, int net) {
+        int d0 = dir[slot0];
+        int d1 = dir[slot1];
         if (d0 != 0 && d1 == 0) {
             return slot0;
         }
@@ -429,5 +477,21 @@ public class VoxelScalerClustering extends AbstractVoxelGenerator implements IFa
             return slot1;
         }
         return net > 0 ? slot1 : slot0;
+    }
+
+    private static int mergeMaxLight(int baseBL, int otherBL) {
+        byte b0 = (byte) baseBL;
+        byte b1 = (byte) otherBL;
+        int sky = Math.max(unpackSkyLight(b0), unpackSkyLight(b1));
+        int blk = Math.max(unpackBlockLight(b0), unpackBlockLight(b1));
+        return (baseBL & ~0xFF) | (packLight(sky, blk) & 0xFF);
+    }
+
+    private static int boostSkyLight(int bl, int minSky) {
+        byte b = (byte) bl;
+        if (minSky <= unpackSkyLight(b)) {
+            return bl;
+        }
+        return (bl & ~0xFF) | (packLight(minSky, unpackBlockLight(b)) & 0xFF);
     }
 }
