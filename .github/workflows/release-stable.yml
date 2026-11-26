@@ -67,7 +67,7 @@ jobs:
               gh release delete-asset stable "$asset" -y
             done
             gh release upload stable "$JAR_FILE" --clobber
-            gh release edit stable --title "Stable Build" --notes "$RELEASE_NOTES"
+            gh release edit stable --title "Latest" --notes "$RELEASE_NOTES"
           else
-            gh release create stable "$JAR_FILE" --title "Stable Build" --notes "$RELEASE_NOTES"
+            gh release create stable "$JAR_FILE" --title "Latest" --notes "$RELEASE_NOTES"
           fi
