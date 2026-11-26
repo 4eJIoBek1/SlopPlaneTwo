@@ -35,6 +35,7 @@ in vec2 vs_out_light;
 flat in vec3 vs_out_color;
 flat in vec3 vs_out_base_pos;
 flat in uint vs_out_state;
+flat in int vs_out_level;
 
 #define fs_in_pos (vs_out_pos)
 #define fs_in_light (vs_out_light)
@@ -42,6 +43,7 @@ flat in uint vs_out_state;
 #define fs_in_color (vs_out_color)
 #define fs_in_base_pos (vs_out_base_pos)
 #define fs_in_state (uint(vs_out_state))
+#define fs_in_level (vs_out_level)
 
 //
 //

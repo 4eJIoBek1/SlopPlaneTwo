@@ -68,7 +68,7 @@ public class RenderConstants {
     public static final int TILE_POS_ARRAY_UBO_BINDING = 2;
 
     public static final String VANILLA_RENDERABILITY_UBO_NAME = "U_VanillaRenderability"; //synced with resources/assets/fp2/shaders/util/vanilla_renderability.glsl
-    public static final int VANILLA_RENDERABILITY_UBO_BINDING = 1;
+    public static final int VANILLA_RENDERABILITY_UBO_BINDING = 3;
 
     public static final String VANILLA_RENDERABILITY_SSBO_NAME = "B_VanillaRenderability"; //synced with resources/assets/fp2/shaders/util/vanilla_renderability.glsl
     public static final int VANILLA_RENDERABILITY_SSBO_BINDING = 7;
@@ -82,6 +82,7 @@ public class RenderConstants {
     public static final int TILE_POS_ARRAY_UBO_ELEMENTS = 16384 / GLIVec4.BYTES;
 
     public static final String TILE_POS_UNIFORM_NAME = "u_TilePos";
+    public static final String DEPTH_BIAS_UNIFORM_NAME = "u_depthBias";
 
     /**
      * Name of the uniform which is used to set the {@code mc_Entity} vertex attribute of the captured shader pack geometry.

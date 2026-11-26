@@ -48,6 +48,11 @@ in vec3 a_pos;
 #   error
 #endif
 
+// Clip-space depth bias for coarse LOD occlusion rescue pass:
+//   gl_Position.z += gl_Position.z * u_depthBias.x + gl_Position.w * u_depthBias.y
+// Default (0.0, 0.0) is an exact identity transform.
+uniform vec2 u_depthBias;
+
 //get the tile position
 //  (how we do this depends on the configured tile position technique)
 ivec4 getTilePosition() {
@@ -79,6 +84,7 @@ void main() {
 
     //vertex position is detail mixed
     gl_Position = cameraTransform(relativePos);
+    gl_Position.z += gl_Position.z * u_depthBias.x + gl_Position.w * u_depthBias.y;
 
     //pass relative position to fragment shader (used to compute face normal)
     vs_out_pos = vs_out_base_pos = vec3(relativePos);
@@ -86,5 +92,6 @@ void main() {
     //copy trivial attributes
     vs_out_light = a_light;
     vs_out_state = a_state;
+    vs_out_level = tilePos.w;
     vs_out_color = computeVertexColor(a_color, tilePos);
 }

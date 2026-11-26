@@ -35,6 +35,7 @@ import net.daporkchop.fp2.core.client.IFrustum;
 import net.daporkchop.fp2.core.client.render.GlobalRenderer;
 import net.daporkchop.fp2.core.client.render.LevelRenderer;
 import net.daporkchop.fp2.core.client.render.ShaderPackCompat;
+import net.daporkchop.fp2.core.client.render.TerrainRenderingBlockedTracker;
 import net.daporkchop.fp2.core.client.render.state.CameraState;
 import net.daporkchop.fp2.core.client.render.state.CameraStateUniforms;
 import net.daporkchop.fp2.core.client.render.state.DrawState;
@@ -70,6 +71,7 @@ import net.daporkchop.fp2.gl.buffer.upload.UnsynchronizedMapBufferUploader;
 import net.daporkchop.fp2.gl.draw.DrawMode;
 import net.daporkchop.fp2.gl.draw.index.IndexFormat;
 import net.daporkchop.fp2.gl.shader.DrawShaderProgram;
+import net.daporkchop.fp2.gl.shader.ShaderProgram;
 import net.daporkchop.fp2.gl.shader.ShaderType;
 import net.daporkchop.fp2.gl.state.StatePreserver;
 import net.daporkchop.lib.common.closeable.PResourceUtil;
@@ -115,6 +117,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
          * regular drawing program.
          */
         final boolean xfb;
+        final boolean vanillaCoarseClip;
 
         public ImmutableMap<String, Object> defines() {
             ImmutableMap.Builder<String, Object> builder = ImmutableMap.builder();
@@ -122,6 +125,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
             builder.put("FP2_FOG_MODE", this.fogMode.ordinal());
             builder.put("FP2_TILE_POS_TECHNIQUE", this.posTechnique.ordinal());
             builder.put("FP2_TEXTURE_UVS_TECHNIQUE", this.quadsTechnique.ordinal());
+            builder.put("FP2_VANILLA_COARSE_CLIP", this.vanillaCoarseClip ? 1 : 0);
             if (this.cutout) {
                 builder.put("FP2_CUTOUT", true);
             }
@@ -133,6 +137,10 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
                 builder.addUBO(RenderConstants.CAMERA_STATE_UNIFORMS_UBO_BINDING, RenderConstants.CAMERA_STATE_UNIFORMS_UBO_NAME);
                 builder.addUBO(RenderConstants.DRAW_STATE_UNIFORMS_UBO_BINDING, RenderConstants.DRAW_STATE_UNIFORMS_UBO_NAME);
                 builder.addUBO(RenderConstants.TILE_POS_ARRAY_UBO_BINDING, RenderConstants.TILE_POS_ARRAY_UBO_NAME);
+                if (this.vanillaCoarseClip) {
+                    builder.addUBO(RenderConstants.VANILLA_RENDERABILITY_UBO_BINDING, RenderConstants.VANILLA_RENDERABILITY_UBO_NAME);
+                    builder.addSSBO(RenderConstants.VANILLA_RENDERABILITY_SSBO_BINDING, RenderConstants.VANILLA_RENDERABILITY_SSBO_NAME);
+                }
                 builder.addSampler(client.terrainTextureUnit(), RenderConstants.TEXTURE_ATLAS_SAMPLER_NAME);
                 builder.addSampler(client.lightmapTextureUnit(), RenderConstants.LIGHTMAP_SAMPLER_NAME);
                 builder.vertexAttributesWithPrefix("a_", globalRenderer.voxelVertexAttributesFormat);
@@ -164,6 +172,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
         }
 
         public static List<DrawShaderVariant> allVariants(@NonNull OpenGL gl) {
+            boolean vanillaCoarseClip = gl.supports(TerrainRenderingBlockedTracker.REQUIRED_EXTENSIONS_GPU);
             FP2Config.Debug.DebugColorMode[] debugColorModes = FP2Config.Debug.DebugColorMode.values();
             DrawState.FogMode[] fogModes = DrawState.FogMode.values();
             RenderIndex.PosTechnique[] posTechniques = RenderIndex.PosTechnique.values();
@@ -188,7 +197,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
                                 boolean cutout = (i & 0b01) != 0;
                                 boolean stencil = (i & 0b10) != 0;
 
-                                result.add(new DrawShaderVariant(debugColorMode, fogMode, posTechnique, quadsTechnique, cutout, stencil, false));
+                                result.add(new DrawShaderVariant(debugColorMode, fogMode, posTechnique, quadsTechnique, cutout, stencil, false, vanillaCoarseClip));
                             }
                         }
                     }
@@ -213,9 +222,12 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
                 builder.addShader(ShaderType.VERTEX, Identifier.from(MODID, "shaders/vert/voxel/voxel.vert"));
                 if (!variant.stencil) {
                     builder.addShader(ShaderType.FRAGMENT, Identifier.from(MODID, "shaders/frag/block.frag"));
+                } else if (variant.vanillaCoarseClip) {
+                    builder.addShader(ShaderType.FRAGMENT, Identifier.from(MODID, "shaders/frag/block_stencil.frag"));
                 }
             }
 
+            boolean vanillaCoarseClip = gl.supports(TerrainRenderingBlockedTracker.REQUIRED_EXTENSIONS_GPU);
             //transform feedback programs which capture fp2's geometry in the vertex format expected by shader packs. these are used to draw the far terrain
             //  through a shader pack's own shader programs, but are registered unconditionally so that they're already available when a pack gets enabled.
             for (val posTechnique : RenderIndex.PosTechnique.values()) {
@@ -228,7 +240,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
                         continue;
                     }
 
-                    val variant = new DrawShaderVariant(FP2Config.Debug.DebugColorMode.DISABLED, DrawState.FogMode.DISABLED, posTechnique, quadsTechnique, false, false, true);
+                    val variant = new DrawShaderVariant(FP2Config.Debug.DebugColorMode.DISABLED, DrawState.FogMode.DISABLED, posTechnique, quadsTechnique, false, false, true, vanillaCoarseClip);
                     val builder = shaderRegistryBuilder.registerDraw(variant, shaderMacros.withDefined(variant.defines()), variant.setupFunction(client, globalRenderer));
                     builder.addShader(ShaderType.VERTEX, Identifier.from(MODID, "shaders/vert/voxel/voxel.vert"));
                     builder.addShader(ShaderType.GEOMETRY, Identifier.from(MODID, "shaders/geom/xfb.geom"));
@@ -265,6 +277,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
      * when the renderer is created. If this value doesn't match the current state, the renderer needs to be recreated.
      */
     protected final boolean shaderPackActive;
+    protected final boolean supportsVanillaCoarseClip;
 
     /**
      * The camera state with which the current frame's translucent pass would have to be drawn through a shader pack's water shader program, or
@@ -306,6 +319,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
             this.levelRenderer = context.level().renderer();
             this.gl = client.gl();
 
+            this.supportsVanillaCoarseClip = this.gl.supports(TerrainRenderingBlockedTracker.REQUIRED_EXTENSIONS_GPU);
             this.shaderPackActive = ShaderPackCompat.isActive();
 
             RenderIndexType renderIndexType = this.chooseRenderIndexType();
@@ -357,6 +371,11 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
                         .texture(TextureTarget.TEXTURE_2D, client.lightmapTextureUnit())
                         .indexedBuffer(IndexedBufferTarget.UNIFORM_BUFFER, RenderConstants.CAMERA_STATE_UNIFORMS_UBO_BINDING)
                         .indexedBuffer(IndexedBufferTarget.UNIFORM_BUFFER, RenderConstants.DRAW_STATE_UNIFORMS_UBO_BINDING);
+                if (this.supportsVanillaCoarseClip) {
+                    statePreserverBuilder
+                            .indexedBuffer(IndexedBufferTarget.UNIFORM_BUFFER, RenderConstants.VANILLA_RENDERABILITY_UBO_BINDING)
+                            .indexedBuffer(IndexedBufferTarget.SHADER_STORAGE_BUFFER, RenderConstants.VANILLA_RENDERABILITY_SSBO_BINDING);
+                }
                 this.levelRenderer.textureUVs().gpuQuadLists().preservedBindState(statePreserverBuilder);
                 this.renderIndex.preservedDrawState(statePreserverBuilder);
                 this.statePreserverDraw = statePreserverBuilder.build();
@@ -432,10 +451,10 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
         ReloadableShaderRegistry shaderRegistry = this.fp2.client().globalRenderer().shaderRegistry;
 
         return new CapturedShaderPrograms(
-                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(debugColorMode, fogMode, this.tilePosTechnique, this.textureQuadsTechnique, false, false, false)).get(),
-                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(debugColorMode, fogMode, this.tilePosTechnique, this.textureQuadsTechnique, true, false, false)).get(),
-                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(debugColorMode, fogMode, this.tilePosTechnique, this.textureQuadsTechnique, false, true, false)).get(),
-                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(FP2Config.Debug.DebugColorMode.DISABLED, DrawState.FogMode.DISABLED, this.tilePosTechnique, this.textureQuadsTechnique, false, false, true)).get());
+                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(debugColorMode, fogMode, this.tilePosTechnique, this.textureQuadsTechnique, false, false, false, this.supportsVanillaCoarseClip)).get(),
+                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(debugColorMode, fogMode, this.tilePosTechnique, this.textureQuadsTechnique, true, false, false, this.supportsVanillaCoarseClip)).get(),
+                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(debugColorMode, fogMode, this.tilePosTechnique, this.textureQuadsTechnique, false, true, false, this.supportsVanillaCoarseClip)).get(),
+                shaderRegistry.<DrawShaderProgram>get(new DrawShaderVariant(FP2Config.Debug.DebugColorMode.DISABLED, DrawState.FogMode.DISABLED, this.tilePosTechnique, this.textureQuadsTechnique, false, false, true, this.supportsVanillaCoarseClip)).get());
     }
 
     /**
@@ -505,13 +524,39 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
             //- render the TRANSPARENT pass at all detail levels at once, using the stencil to not only prevent low-detail from rendering over high-detail, but also fp2 transparent water
             //  from rendering over vanilla water
 
+            boolean shaderPackActiveNow = ShaderPackCompat.isActive();
+            ShaderPackCompat.Renderer activeShaderPack = shaderPackActiveNow ? ShaderPackCompat.renderer() : null;
+            boolean shadowPass = activeShaderPack != null && activeShaderPack.isShadowPass();
+
             if (drawableMask.shouldDrawAnythingForLayer(RenderConstants.LAYER_SOLID) || drawableMask.shouldDrawAnythingForLayer(RenderConstants.LAYER_CUTOUT)) {
-                for (int level = drawableMask.minLevelToDraw(); level < drawableMask.maxLevelToDraw(); level++) {
-                    if (drawableMask.shouldDrawAnythingForLevelLayer(level, RenderConstants.LAYER_SOLID)) {
+                int minLevel = drawableMask.minLevelToDraw();
+                for (int level = minLevel; level < drawableMask.maxLevelToDraw(); level++) {
+                    boolean hasSolid = drawableMask.shouldDrawAnythingForLevelLayer(level, RenderConstants.LAYER_SOLID);
+                    boolean hasCutout = drawableMask.shouldDrawAnythingForLevelLayer(level, RenderConstants.LAYER_CUTOUT);
+                    if (hasSolid) {
                         this.renderSolid(drawArguments, capturedShaderPrograms, level);
                     }
-                    if (drawableMask.shouldDrawAnythingForLevelLayer(level, RenderConstants.LAYER_CUTOUT)) {
+                    if (hasCutout) {
                         this.renderCutout(drawArguments, capturedShaderPrograms, level);
+                    }
+
+                    //Rescue pass for non-shaderpack stencil path: if a closer coarse tile sits significantly
+                    //  in front of a farther finer tile (e.g. closer L1 terrain in front of farther L0 underground
+                    //  caves when nearby L0 tiles are still loading), allow it to overwrite stencil < level pixels
+                    //  only when it beats the stored depth even after pushing its depth back by +(5% * level).
+                    //  Normal L0<->L1 seam overlap differs by at most a few blocks (<5%), so L0 still wins seamlessly.
+                    if (!shaderPackActiveNow && !shadowPass && level > minLevel && (hasSolid || hasCutout)) {
+                        float invScale = 1.0f / (1.0f + 0.05f * level);
+                        float biasZ = invScale - 1.0f;
+                        float biasW = drawArguments.reversedZ ? 0.0f : (1.0f - invScale);
+                        this.gl.glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+                        this.gl.glStencilFunc(GL_GREATER, level, 0x7F);
+                        if (hasSolid) {
+                            this.renderSolidRescued(drawArguments, capturedShaderPrograms, level, biasZ, biasW);
+                        }
+                        if (hasCutout) {
+                            this.renderCutoutRescued(drawArguments, capturedShaderPrograms, level, biasZ, biasW);
+                        }
                     }
                 }
             }
@@ -604,6 +649,9 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
             //  state itself is left as-is: the far water is drawn at its true height, see renderTranslucentPass().
             this.gl.glBindBufferBase(GL_UNIFORM_BUFFER, RenderConstants.CAMERA_STATE_UNIFORMS_UBO_BINDING, this.cameraStateUniformsBuffer.buffer().id());
             this.gl.glBindBufferBase(GL_UNIFORM_BUFFER, RenderConstants.DRAW_STATE_UNIFORMS_UBO_BINDING, this.drawStateUniformsBuffer.buffer().id());
+            if (this.supportsVanillaCoarseClip) {
+                this.levelRenderer.blockedTracker().bindGlBuffers(this.gl, RenderConstants.VANILLA_RENDERABILITY_UBO_BINDING, RenderConstants.VANILLA_RENDERABILITY_SSBO_BINDING);
+            }
 
             //fp2's state preserver resets the fixed-function state before drawing, which includes disabling depth testing. the translucent pass is drawn
             //  outside of the regular render pass, so it doesn't go through preRender() and has to set up the state it needs on its own.
@@ -628,6 +676,9 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
         //bind uniform buffers
         this.gl.glBindBufferBase(GL_UNIFORM_BUFFER, RenderConstants.CAMERA_STATE_UNIFORMS_UBO_BINDING, this.cameraStateUniformsBuffer.buffer().id());
         this.gl.glBindBufferBase(GL_UNIFORM_BUFFER, RenderConstants.DRAW_STATE_UNIFORMS_UBO_BINDING, this.drawStateUniformsBuffer.buffer().id());
+        if (this.supportsVanillaCoarseClip) {
+            drawArguments.blockedTracker.bindGlBuffers(this.gl, RenderConstants.VANILLA_RENDERABILITY_UBO_BINDING, RenderConstants.VANILLA_RENDERABILITY_SSBO_BINDING);
+        }
 
         this.gl.glEnable(GL_DEPTH_TEST);
         this.gl.glDepthFunc(drawArguments.reversedZ ? GL_GREATER : GL_LEQUAL);
@@ -649,6 +700,9 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
         //bind uniform buffers
         this.gl.glBindBufferBase(GL_UNIFORM_BUFFER, RenderConstants.CAMERA_STATE_UNIFORMS_UBO_BINDING, this.cameraStateUniformsBuffer.buffer().id());
         this.gl.glBindBufferBase(GL_UNIFORM_BUFFER, RenderConstants.DRAW_STATE_UNIFORMS_UBO_BINDING, this.drawStateUniformsBuffer.buffer().id());
+        if (this.supportsVanillaCoarseClip) {
+            drawArguments.blockedTracker.bindGlBuffers(this.gl, RenderConstants.VANILLA_RENDERABILITY_UBO_BINDING, RenderConstants.VANILLA_RENDERABILITY_SSBO_BINDING);
+        }
 
         this.gl.glEnable(GL_DEPTH_TEST);
 
@@ -678,6 +732,13 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
         this.renderIndex.postDraw(drawArguments);
     }
 
+    private static void setDepthBias(DrawShaderProgram shader, ShaderProgram.UniformSetter uniformSetter, float biasZ, float biasW) {
+        int loc = shader.uniformLocation(RenderConstants.DEPTH_BIAS_UNIFORM_NAME);
+        if (loc >= 0) {
+            uniformSetter.set2f(loc, biasZ, biasW);
+        }
+    }
+
     private void renderSolid(RenderIndex.DrawArguments drawArguments, CapturedShaderPrograms capturedShaderPrograms, int level) {
         //GlStateManager.disableAlpha();
 
@@ -689,9 +750,21 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
 
         val shader = capturedShaderPrograms.blockShaderProgram;
         val uniformSetter = shader.bindUnsafe();
+        setDepthBias(shader, uniformSetter, 0.0f, 0.0f);
         this.renderIndex.draw(drawArguments, level, RenderConstants.LAYER_SOLID, shader, uniformSetter);
 
         //GlStateManager.enableAlpha();
+    }
+
+    private void renderSolidRescued(RenderIndex.DrawArguments drawArguments, CapturedShaderPrograms capturedShaderPrograms, int level, float biasZ, float biasW) {
+        val shader = capturedShaderPrograms.blockShaderProgram;
+        val uniformSetter = shader.bindUnsafe();
+        setDepthBias(shader, uniformSetter, biasZ, biasW);
+        try {
+            this.renderIndex.draw(drawArguments, level, RenderConstants.LAYER_SOLID, shader, uniformSetter);
+        } finally {
+            setDepthBias(shader, uniformSetter, 0.0f, 0.0f);
+        }
     }
 
     private void renderCutout(RenderIndex.DrawArguments drawArguments, CapturedShaderPrograms capturedShaderPrograms, int level) {
@@ -705,9 +778,21 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
 
         val shader = capturedShaderPrograms.blockCutoutShaderProgram;
         val uniformSetter = shader.bindUnsafe();
+        setDepthBias(shader, uniformSetter, 0.0f, 0.0f);
         this.renderIndex.draw(drawArguments, level, RenderConstants.LAYER_CUTOUT, shader, uniformSetter);
 
         //MC.getTextureManager().getTexture(TextureMap.LOCATION_BLOCKS_TEXTURE).restoreLastBlurMipmap();
+    }
+
+    private void renderCutoutRescued(RenderIndex.DrawArguments drawArguments, CapturedShaderPrograms capturedShaderPrograms, int level, float biasZ, float biasW) {
+        val shader = capturedShaderPrograms.blockCutoutShaderProgram;
+        val uniformSetter = shader.bindUnsafe();
+        setDepthBias(shader, uniformSetter, biasZ, biasW);
+        try {
+            this.renderIndex.draw(drawArguments, level, RenderConstants.LAYER_CUTOUT, shader, uniformSetter);
+        } finally {
+            setDepthBias(shader, uniformSetter, 0.0f, 0.0f);
+        }
     }
 
     /**
@@ -722,6 +807,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
 
         val shader = capturedShaderPrograms.blockCutoutShaderProgram;
         val uniformSetter = shader.bindUnsafe();
+        setDepthBias(shader, uniformSetter, 0.0f, 0.0f);
         this.renderIndex.draw(drawArguments, level, RenderConstants.LAYER_TRANSPARENT, shader, uniformSetter);
     }
 
@@ -732,6 +818,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
 
         val shader = capturedShaderPrograms.blockStencilShaderProgram;
         val uniformSetter = shader.bindUnsafe();
+        setDepthBias(shader, uniformSetter, 0.0f, 0.0f);
 
         this.gl.glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
         for (int level = drawableMask.minLevelToDraw(); level < drawableMask.maxLevelToDraw(); level++) {
@@ -754,6 +841,7 @@ public abstract class AbstractFarRenderer<VertexType extends AttributeStruct> ex
 
         val shader = capturedShaderPrograms.blockShaderProgram;
         val uniformSetter = shader.bindUnsafe();
+        setDepthBias(shader, uniformSetter, 0.0f, 0.0f);
 
         this.gl.glStencilMask(0);
         this.gl.glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);

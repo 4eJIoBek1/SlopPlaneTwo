@@ -36,6 +36,7 @@ out vec2 vs_out_light;
 flat out vec3 vs_out_color;
 flat out vec3 vs_out_base_pos;
 flat out uint vs_out_state;
+flat out int vs_out_level;
 
 //
 //

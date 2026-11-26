@@ -68,3 +68,33 @@ bool isVanillaRenderableLevel0(in ivec3 chunkPos) {
     //extract the bit at the given index
     return (b_VanillaRenderability.flags[idx >> 5u] & (1u << idx)) != 0u;
 }
+
+bool isVanillaRenderableTile(in ivec4 tilePos) {
+    if (tilePos.w == 0) {
+        return isVanillaRenderableLevel0(tilePos.xyz);
+    }
+    if (tilePos.w > 2) {
+        return false;
+    }
+
+    int span = 1 << tilePos.w;
+    ivec3 baseChunk = tilePos.xyz << tilePos.w;
+    uvec3 tableOffset = u_VanillaRenderability.offset.xyz;
+    uvec3 tableSize = u_VanillaRenderability.size.xyz;
+    uvec3 minOff = uvec3(baseChunk) + tableOffset;
+    uvec3 maxOff = uvec3(baseChunk + span) + tableOffset;
+    if (any(greaterThanEqual(minOff, tableSize)) || any(greaterThanEqual(maxOff, tableSize))) {
+        return false;
+    }
+
+    for (int dx = 0; dx <= span; dx++) {
+        for (int dy = 0; dy <= span; dy++) {
+            for (int dz = 0; dz <= span; dz++) {
+                if (!isVanillaRenderableLevel0(baseChunk + ivec3(dx, dy, dz))) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}

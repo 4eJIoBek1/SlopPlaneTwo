@@ -275,7 +275,9 @@ public final class Tracker {
             return;
         }
 
-        int targetLoadQueueSize = fp2().globalConfig().performance().terrainThreads() - this.context.queuedTilesToSend();
+        final int l0BatchSpan = batchedL0ColumnSpan(this.coordLimits);
+        final int baseTarget = fp2().globalConfig().performance().terrainThreads() - this.context.queuedTilesToSend();
+        int targetLoadQueueSize = baseTarget;
         List<TilePos> positions = DirectTilePosAccess.newPositionArrayList();
 
         do {
@@ -310,15 +312,23 @@ public final class Tracker {
                     return;
                 }
 
+                TilePos head = this.queuedPositions.peekFirst();
+                int batchScale = (l0BatchSpan > 1 && head != null && head.level() == 0) ? l0BatchSpan : 1;
+                targetLoadQueueSize = baseTarget * batchScale;
+
                 //keep adding positions from the queue until waitingPositions has targetLoadQueueSize elements or the queue is drained
                 for (int count = targetLoadQueueSize - this.waitingPositions.size(); count > 0; count--) {
-                    TilePos pos = this.queuedPositions.poll();
-                    if (pos == null) { //nothing left in the queue, therefore nothing left to do!
+                    TilePos next = this.queuedPositions.peekFirst();
+                    if (next == null) { //nothing left in the queue, therefore nothing left to do!
+                        break;
+                    }
+                    if (batchScale > 1 && next.level() != 0 && this.waitingPositions.size() + positions.size() >= baseTarget) {
+                        targetLoadQueueSize = baseTarget;
                         break;
                     }
 
-                    //buffer the positions we want to add in a list (we don't want to being tracking them while holding the monitor since that could deadlock)
-                    positions.add(pos);
+                    //buffer the positions we want to add in a list (we don't want to begin tracking them while holding the monitor since that could deadlock)
+                    positions.add(this.queuedPositions.poll());
                 }
 
                 //begin tracking all of the added positions
@@ -330,7 +340,7 @@ public final class Tracker {
             } finally {
                 PUnsafe.monitorExit(this);
             }
-        } while (!this.doneWaitingPositions.isEmpty() || this.waitingPositions.size() < targetLoadQueueSize);
+        } while (!this.doneWaitingPositions.isEmpty() || (targetLoadQueueSize > 0 && this.waitingPositions.size() < targetLoadQueueSize));
     }
 
     /**
@@ -606,6 +616,11 @@ public final class Tracker {
                && abs(pos.z() - asrRound(floorI(state.z()), T_SHIFT + pos.level())) <= state.cutoff();
     }
 
+    static int batchedL0ColumnSpan(@NonNull TileCoordLimits coordLimits) {
+        long span = (long) coordLimits.max(0).y() - (long) coordLimits.min(0).y();
+        return (span > 1L && span <= 32L) ? (int) span : 1;
+    }
+
     /**
      * Gets a {@link Comparator} which can be used for sorting the tile positions visible in the given {@link TrackingState} by their load priority.
      *
@@ -613,6 +628,11 @@ public final class Tracker {
      * @return a {@link Comparator} for sorting visible tile positions
      */
     private Comparator<TilePos> comparatorFor(@NonNull TrackingState state) {
+        return comparatorFor(state, this.coordLimits);
+    }
+
+    static Comparator<TilePos> comparatorFor(@NonNull TrackingState state, @NonNull TileCoordLimits coordLimits) {
+        final boolean columnOrderedL0 = batchedL0ColumnSpan(coordLimits) > 1;
         class TilePosAndComparator extends TilePos implements Comparator<TilePos> {
             public TilePosAndComparator(int level, int x, int y, int z) {
                 super(level, x, y, z);
@@ -623,6 +643,23 @@ public final class Tracker {
                 int d;
                 if ((d = o1.level() - o2.level()) != 0) {
                     return d;
+                }
+                if (columnOrderedL0 && o1.level() == 0) {
+                    int h1 = abs(this.x - o1.x()) + abs(this.z - o1.z());
+                    int h2 = abs(this.x - o2.x()) + abs(this.z - o2.z());
+                    if ((d = Integer.compare(h1, h2)) != 0) {
+                        return d;
+                    }
+                    if ((d = Integer.compare(o1.x(), o2.x())) != 0) {
+                        return d;
+                    }
+                    if ((d = Integer.compare(o1.z(), o2.z())) != 0) {
+                        return d;
+                    }
+                    if ((d = Integer.compare(abs(this.y - o1.y()), abs(this.y - o2.y()))) != 0) {
+                        return d;
+                    }
+                    return Integer.compare(o1.y(), o2.y());
                 }
                 return Integer.compare(this.manhattanDistance(o1), this.manhattanDistance(o2));
             }

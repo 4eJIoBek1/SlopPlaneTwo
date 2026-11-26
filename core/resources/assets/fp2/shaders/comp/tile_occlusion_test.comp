@@ -25,7 +25,7 @@ layout(local_size_x = 64) in;
 
 #include <"fp2:shaders/util/camera_state_uniforms.glsl"> // u_modelViewProjectionMatrix, u_positionFrac, u_positionFloor
 #include <"fp2:shaders/util/frustum.glsl"> // isBoxInFrustum()
-#include <"fp2:shaders/util/vanilla_renderability.glsl"> // isVanillaRenderableLevel0()
+#include <"fp2:shaders/util/vanilla_renderability.glsl"> // isVanillaRenderableTile()
 
 #define min4(a0, a1, a2, a3) (min(min(min(a0, a1), a2), a3))
 #define max4(a0, a1, a2, a3) (max(max(max(a0, a1), a2), a3))
@@ -98,8 +98,8 @@ bool select(uint tileIndex) {
         return false;
     }
 
-    // Level-0 tiles must not overlap vanilla renderable terrain
-    if (pos.w == 0 && isVanillaRenderableLevel0(pos.xyz)) {
+    // Tiles fully covered by vanilla renderable terrain can be skipped completely
+    if (isVanillaRenderableTile(pos)) {
         return false;
     }
 

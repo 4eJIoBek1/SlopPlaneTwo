@@ -23,6 +23,11 @@
 #include <"fp2:shaders/util/debug_color_mode.glsl"> // FP2_DEBUG_COLOR_MODE_*
 #include <"fp2:shaders/util/draw_state_uniforms.glsl"> // u_alphaRefCutout
 
+#if FP2_VANILLA_COARSE_CLIP
+#include <"fp2:shaders/util/camera_state_uniforms.glsl">
+#include <"fp2:shaders/util/vanilla_renderability.glsl">
+#endif
+
 vec4 computeBlockColor(vec3 normal) {
     //initial block texture sample
     vec4 frag_color = sampleTerrain(normal);
@@ -65,6 +70,15 @@ vec4 computeBaseFragColor(vec3 normal) {
 }
 
 void main() {
+#if FP2_VANILLA_COARSE_CLIP
+    if (fs_in_level > 0) {
+        ivec3 fragChunkPos = (u_positionFloor + ivec3(floor(fs_in_pos + u_positionFrac))) >> T_SHIFT;
+        if (isVanillaRenderableLevel0(fragChunkPos)) {
+            discard;
+        }
+    }
+#endif
+
     vec3 normal = normalVector();
 
     vec4 frag_color = computeBaseFragColor(normal);

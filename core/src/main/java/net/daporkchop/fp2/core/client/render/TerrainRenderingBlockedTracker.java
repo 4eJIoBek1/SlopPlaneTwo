@@ -302,6 +302,10 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
         //@formatter:on
     }
 
+    protected static boolean isBlockedBit(long addr, int idx) {
+        return (PUnsafe.getInt(addr + FLAGS_OFFSET + ((long) idx >> 5 << 2)) & (1 << idx)) != 0;
+    }
+
     //TODO: document whatever the fuck this is, lmao
     protected static void transformFlags(int scanMinX, int scanMaxX, int scanMinY, int scanMaxY, int scanMinZ, int scanMaxZ,
                                          int minChunkX, int maxChunkX, int minChunkY, int maxChunkY, int minChunkZ, int maxChunkZ,
@@ -356,6 +360,30 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
                         }
                     }
 
+                    if (!out
+                            && y > scanMinY
+                            && (centerFlags & (FLAG_VERIFIED_EMPTY | FLAG_NONEMPTY)) == FLAG_VERIFIED_EMPTY) {
+                        //OptiFine's ChunkVisibility skips empty air sections above maxChunkY (leaving FLAG_RENDERABLE == 0).
+                        //  Once the section directly below is blocked (vanilla rendered top faces of y-1) and negative horizontal
+                        //  neighbors (NORTH, WEST) are either blocked or themselves verified-empty, this sky section has no
+                        //  unrendered boundary faces and is safe to mark blocked (preventing coarse LODs poking into empty air
+                        //  above rendered vanilla terrain/oceans from escaping vanilla clipping).
+                        int downIdx = idx + faceIndexOffsets[0];
+                        if (isBlockedBit(addr, downIdx)) {
+                            int northIdx = idx + faceIndexOffsets[2];
+                            int westIdx = idx + faceIndexOffsets[4];
+                            boolean northSafe = (z - offsetChunkZ - 1 < minChunkZ)
+                                    || isBlockedBit(addr, northIdx)
+                                    || (srcFlags[northIdx] & (FLAG_VERIFIED_EMPTY | FLAG_NONEMPTY)) == FLAG_VERIFIED_EMPTY;
+                            boolean westSafe = (x - offsetChunkX - 1 < minChunkX)
+                                    || isBlockedBit(addr, westIdx)
+                                    || (srcFlags[westIdx] & (FLAG_VERIFIED_EMPTY | FLAG_NONEMPTY)) == FLAG_VERIFIED_EMPTY;
+                            if (northSafe && westSafe) {
+                                out = true;
+                            }
+                        }
+                    }
+
                     if (out) {
                         long wordAddr = addr + FLAGS_OFFSET + (idx >> 5 << 2);
                         PUnsafe.putInt(wordAddr, PUnsafe.getInt(wordAddr) | (1 << idx));
@@ -386,6 +414,41 @@ public abstract class TerrainRenderingBlockedTracker implements AutoCloseable {
         //this is carefully crafted so that HotSpot C2 on OpenJDK 8 on x86_64 can optimize this into just three instructions
         // by taking advantage of complex addressing
         return (PUnsafe.getInt(this.addr + FLAGS_OFFSET + ((long) idx >> 5 << 2)) & (1 << idx)) != 0;
+    }
+
+    /**
+     * Checks whether the entire footprint of the tile at {@code (level, tileX, tileY, tileZ)} is blocked by vanilla terrain.
+     * Partial border tiles return {@code false} and are clipped per-fragment/triangle in the draw/XFB shaders.
+     */
+    public final boolean renderingBlockedCoarse(int level, int tileX, int tileY, int tileZ) {
+        if (level <= 0) {
+            return this.renderingBlocked(tileX, tileY, tileZ);
+        }
+        if (level > 2) {
+            return false;
+        }
+        int span = 1 << level;
+        int baseX = tileX << level;
+        int baseY = tileY << level;
+        int baseZ = tileZ << level;
+        int maxX = baseX + span;
+        int maxY = baseY + span;
+        int maxZ = baseZ + span;
+        if (baseX + this.offsetX < 0 || maxX + this.offsetX >= this.sizeX
+                || baseY + this.offsetY < 0 || maxY + this.offsetY >= this.sizeY
+                || baseZ + this.offsetZ < 0 || maxZ + this.offsetZ >= this.sizeZ) {
+            return false;
+        }
+        for (int cx = baseX; cx <= maxX; cx++) {
+            for (int cy = baseY; cy <= maxY; cy++) {
+                for (int cz = baseZ; cz <= maxZ; cz++) {
+                    if (!this.renderingBlocked(cx, cy, cz)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     /**

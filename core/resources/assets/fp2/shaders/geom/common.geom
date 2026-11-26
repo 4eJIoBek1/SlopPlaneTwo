@@ -33,6 +33,7 @@ in vec2 vs_out_light[3];
 flat in vec3 vs_out_color[3];
 flat in vec3 vs_out_base_pos[3];
 flat in uint vs_out_state[3];
+flat in int vs_out_level[3];
 
 /**
  * A single vertex as emitted by the vertex shader.
@@ -44,6 +45,7 @@ struct VsOut {
     vec3 color;
     vec3 base_pos;
     uint state;
+    int level;
 };
 
 VsOut gs_in[3];
@@ -61,5 +63,6 @@ void gs_fetchInputs() {
         gs_in[i].color = vs_out_color[i];
         gs_in[i].base_pos = vs_out_base_pos[i];
         gs_in[i].state = vs_out_state[i];
+        gs_in[i].level = vs_out_level[i];
     }
 }

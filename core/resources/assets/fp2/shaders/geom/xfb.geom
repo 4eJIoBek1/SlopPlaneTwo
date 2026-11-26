@@ -24,6 +24,11 @@
 #include <"fp2:shaders/util/texture_uvs_technique.glsl"> // TexQuadList, PackedBakedQuad, stateAndFaceIndexToTexQuadList(), quadIndexToQuad()
 #include <"fp2:shaders/geom/common.geom"> // gs_in[]
 
+#if FP2_VANILLA_COARSE_CLIP
+#include <"fp2:shaders/util/camera_state_uniforms.glsl">
+#include <"fp2:shaders/util/vanilla_renderability.glsl">
+#endif
+
 //
 //
 // GEOMETRY SHADER-SPECIFIC CONFIGURATION
@@ -138,6 +143,27 @@ vec4 computeTangent(vec3 normal, vec2 uv0, vec2 uv1, vec2 uv2) {
 
 void main() {
     gs_fetchInputs();
+
+#if FP2_VANILLA_COARSE_CLIP
+    if (gs_in[PROVOKING].level > 0) {
+        vec3 centerPos = (gs_in[0].pos + gs_in[1].pos + gs_in[2].pos) * (1.0 / 3.0);
+        ivec3 triChunkPos = (u_positionFloor + ivec3(floor(centerPos + u_positionFrac))) >> T_SHIFT;
+        if (isVanillaRenderableLevel0(triChunkPos)) {
+            // Emit a degenerate zero-area triangle so XFB vertex count stays deterministic.
+            for (int i = 0; i < 3; i++) {
+                xfb_pos = vec4(0.0);
+                xfb_colorNormal = uvec2(0u, 127u << 8);
+                xfb_uv = vec2(0.0);
+                xfb_misc = uvec2(0u);
+                xfb_tangent = vec4(1.0, 0.0, 0.0, 1.0);
+                gl_Position = vec4(0.0);
+                EmitVertex();
+            }
+            EndPrimitive();
+            return;
+        }
+    }
+#endif
 
     vec3 normal = normalVector();
     uint state = gs_in[PROVOKING].state;
