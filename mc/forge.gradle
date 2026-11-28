@@ -34,7 +34,4 @@ dependencies {
         //  processor config
         annotationProcessor "org.spongepowered:mixin:$mixinVersion:processor"
     }
-
-    //depend on forgerocks for the current minecraft version
-    implementationProvided "net.daporkchop:forgerocks:$rocksdbVersion-$minecraftVersion"
 }

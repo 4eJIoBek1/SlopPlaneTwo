@@ -118,6 +118,10 @@ shadowJar {
     configurations = [project.configurations.shade_]
 
     exclude 'module-info.class'
+    exclude 'librocksdbjni-linux-ppc64le*.so'
+    exclude 'librocksdbjni-linux-s390x*.so'
+    exclude 'librocksdbjni-linux32*.so'
+    exclude 'librocksdbjni-*-musl.so'
 
     manifest {
         attributes(

@@ -33,10 +33,10 @@ jobs:
           distribution: temurin
           java-version: '8'
 
-      - name: Install native build tools (clang, lld, mingw-w64)
+      - name: Install native build tools (clang, lld, mingw-w64, aarch64-linux-gnu)
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang lld g++-mingw-w64-x86-64
+          sudo apt-get install -y clang lld g++-mingw-w64-x86-64 g++-aarch64-linux-gnu
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -59,7 +59,10 @@ jobs:
               sos = [n for n in names if n.endswith(".so")]
               print(f"Verified {jars[0]}: refmap={len(mappings)}, dlls={len(dlls)}, sos={len(sos)}")
               assert len(dlls) >= 25, f"Expected at least 25 .dlls, got {len(dlls)}"
-              assert len(sos) >= 25, f"Expected at least 25 .sos, got {len(sos)}"
+              assert len(sos) >= 26, f"Expected at least 26 .sos, got {len(sos)}"
+              assert "net/daporkchop/fp2/gl/opengl/lwjgl2/extra/aarch64-linux-gnu.so" in names, "Missing aarch64-linux-gnu.so for lwjgl2/extra!"
+              assert "librocksdbjni-win64.dll" in names and "librocksdbjni-linux64.so" in names and "librocksdbjni-linux-aarch64.so" in names, "Missing embedded rocksdbjni natives!"
+              assert not any("ppc64le" in n or "s390x" in n or "linux32" in n or "-musl" in n for n in names), "Unexpected excluded rocksdbjni natives!"
           EOF
 
       - name: Publish to stable GitHub Release

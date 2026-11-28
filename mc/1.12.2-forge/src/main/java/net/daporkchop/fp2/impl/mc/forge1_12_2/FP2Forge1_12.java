@@ -61,7 +61,7 @@ import static net.daporkchop.lib.common.util.PValidation.*;
  */
 @Mod(modid = FP2.MODID,
         useMetadata = true,
-        dependencies = "required-after:forgerocks@[6.28.2,);after:cubicchunks@[1.12.2-0.0.1255.0,)",
+        dependencies = "after:cubicchunks@[1.12.2-0.0.1255.0,)",
         acceptedMinecraftVersions = "1.12.2")
 public final class FP2Forge1_12 extends FP2Core {
     public static Identifier getIdentifierForWorld(@NonNull World world) {

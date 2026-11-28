@@ -35,6 +35,8 @@ dependencies {
     testImplementation "org.lwjgl.lwjgl:lwjgl-platform:$lwjgl2Version:natives-linux"
 }
 
+natives.operatingSystems['linux-gnu'].supportedArchitectures = [natives.architectures.x86_64, natives.architectures.aarch64]
+
 natives.modules {
     main {
         sourceSet = sourceSets.main

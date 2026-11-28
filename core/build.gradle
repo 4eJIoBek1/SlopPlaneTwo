@@ -28,7 +28,7 @@ dependencies {
     implementationProvided "com.google.code.gson:gson:$gsonVersion"
     implementationProvided "com.google.guava:guava:$guavaVersion"
     implementationProvided "io.netty:netty-all:$nettyVersion"
-    implementationProvided "org.rocksdb:rocksdbjni:$rocksdbVersion"
+    implementationShade "org.rocksdb:rocksdbjni:$rocksdbVersion"
 
     apiShade("net.daporkchop.lib:compression-zstd:$porklibVersion") {
         exclude group: "io.netty"
