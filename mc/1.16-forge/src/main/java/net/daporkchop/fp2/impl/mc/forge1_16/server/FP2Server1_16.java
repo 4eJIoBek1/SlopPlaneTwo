@@ -123,8 +123,6 @@ public class FP2Server1_16 extends FP2Server {
     @SubscribeEvent
     public void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
         if (event.getPlayer() instanceof ServerPlayerEntity) {
-            event.getPlayer().sendMessage(new TranslationTextComponent(MODID + ".playerJoinWarningMessage"), Util.NIL_UUID);
-
             IFarPlayerServer player = ((IMixinServerPlayNetHandler1_16) ((ServerPlayerEntity) event.getPlayer()).connection).fp2_farPlayerServer();
             player.fp2_IFarPlayer_serverConfig(this.fp2().globalConfig());
             player.fp2_IFarPlayer_sendPacket(SPacketHandshake.create());

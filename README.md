@@ -18,10 +18,9 @@ The name is in reference to [Foghrye4's CWGFarPlaneView](https://www.curseforge.
 ## Installation
 *This is a Forge mod for Minecraft 1.12.2. Other versions WILL be supported in the future.*
 1) Install [Minecraft Forge](https://files.minecraftforge.net/net/minecraftforge/forge/index_1.12.2.html) for Minecraft 1.12.2.
-2) [Download](https://jenkins.daporkchop.net/job/PorkStudios/job/FarPlaneTwo/job/master/) the mod.
-3) Download these dependencies too:
-   - [ForgeRocks](https://www.curseforge.com/minecraft/mc-mods/forgerocks)
-   - [Mixin](https://www.curseforge.com/minecraft/mc-mods/mixin-0-7-0-8-compatibility)
+2) Download the mod from [Releases](https://github.com/4eJIoBek1/SlopPlaneTwo/releases).
+3) Download dependency:
+   - [MixinBooter](https://www.curseforge.com/minecraft/mc-mods/mixinbooter) (RocksDB is already bundled inside FP2).
 
 For best results use cubic chunks and cubic world gen and set the world type to custom cubic.
 
