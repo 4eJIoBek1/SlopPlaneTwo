@@ -2,6 +2,8 @@ name: Build Stable Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - stable
   workflow_dispatch:
@@ -11,6 +13,13 @@ permissions:
 
 jobs:
   build:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.ref == 'refs/tags/stable' ||
+      startsWith(github.event.head_commit.message, 'stable:') ||
+      startsWith(github.event.head_commit.message, 'stable ') ||
+      startsWith(github.event.head_commit.message, 'Stable:') ||
+      startsWith(github.event.head_commit.message, 'Stable ')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -58,9 +67,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           JAR_FILE=$(ls mc/1.12.2-forge/build/libs/fp2-*.jar | head -n 1)
-          RELEASE_NOTES=$(git tag -l --format='%(contents)' stable 2>/dev/null)
-          if [ -z "$RELEASE_NOTES" ]; then
+          if [ "${{ github.ref }}" != "refs/tags/stable" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -f stable "$GITHUB_SHA"
+            git push origin refs/tags/stable --force
             RELEASE_NOTES=$(git log -1 --pretty=%B)
+          else
+            RELEASE_NOTES=$(git tag -l --format='%(contents)' stable 2>/dev/null)
+            if [ -z "$RELEASE_NOTES" ]; then
+              RELEASE_NOTES=$(git log -1 --pretty=%B)
+            fi
           fi
           if gh release view stable >/dev/null 2>&1; then
             for asset in $(gh release view stable --json assets -q '.assets[].name'); do
